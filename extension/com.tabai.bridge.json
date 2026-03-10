@@ -1,0 +1,9 @@
+{
+  "name": "com.tabai.bridge",
+  "description": "Native messaging host for tabai CLI bridge",
+  "path": "/usr/local/bin/tabai-native-host",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://TO_BE_REPLACED_WITH_EXTENSION_ID/"
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "tabai bridge",
+  "description": "Silent bridge for tabai CLI",
+  "version": "1.0.0",
+  "permissions": [
+    "tabs",
+    "storage",
+    "bookmarks",
+    "tabGroups",
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "128": "icon.png"
+  }
+}

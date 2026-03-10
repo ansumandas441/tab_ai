@@ -1,0 +1,7 @@
+{
+  "ollamaUrl": "http://localhost:11434",
+  "model": "qwen3.5:4b",
+  "think": false,
+  "bridgePort": 9999,
+  "confirmDestructive": true
+}
