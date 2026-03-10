@@ -16,6 +16,7 @@ function parseArgs(argv) {
     command: '',
     yes: false,
     dryRun: false,
+    debug: false,
     model: undefined,
     ollamaUrl: undefined,
     subcommand: null,
@@ -32,6 +33,8 @@ function parseArgs(argv) {
       parsed.yes = true;
     } else if (arg === '--dry-run') {
       parsed.dryRun = true;
+    } else if (arg === '--debug') {
+      parsed.debug = true;
     } else if (arg === '--model') {
       i++;
       parsed.model = args[i];
@@ -82,6 +85,7 @@ ${chalk.bold('Usage:')}
 ${chalk.bold('Flags:')}
   -y, --yes, --no-confirm   Skip confirmation for destructive actions
   --dry-run                 Preview what would happen, don't execute
+  --debug                   Show full LLM request/response and bridge calls
   --model <name>            Override the Ollama model
   --ollama-url <url>        Override the Ollama server URL
   -h, --help                Show this help message
@@ -153,6 +157,10 @@ function previewAction(action, tabs) {
       for (const url of action.urls ?? []) {
         console.log(chalk.cyan(`  + ${url}`));
       }
+      break;
+
+    case 'open_new_tabs':
+      console.log(chalk.cyan(`\nWill open ${action.count ?? 1} new tab${(action.count ?? 1) !== 1 ? 's' : ''}`));
       break;
 
     case 'bookmark_tabs': {
@@ -254,7 +262,7 @@ async function main() {
   const parsed = parseArgs(process.argv);
 
   // Load config with CLI overrides
-  const config = await loadConfig({ model: parsed.model, ollamaUrl: parsed.ollamaUrl });
+  const config = await loadConfig({ model: parsed.model, ollamaUrl: parsed.ollamaUrl, debug: parsed.debug || undefined });
 
   // ── Subcommands (no model call) ──────────────────────────────────────────
   if (parsed.subcommand === 'history') {
@@ -287,6 +295,13 @@ async function main() {
 
   // ── Step 2: Format tabs compactly ────────────────────────────────────────
   const tabsFormatted = formatTabs(tabs);
+
+  if (config.debug) {
+    console.log(chalk.magenta.bold('\n─── DEBUG: Tabs from bridge ───'));
+    console.log(chalk.magenta(JSON.stringify(tabs, null, 2)));
+    console.log(chalk.magenta.bold('\n─── DEBUG: Formatted tabs sent to LLM ───'));
+    console.log(chalk.magenta(tabsFormatted));
+  }
 
   // ── Step 3: Fetch optional history context for relevant commands ─────────
   let historyContext = '';
@@ -323,6 +338,16 @@ async function main() {
   }
 
   // ── Step 4: Query Ollama ─────────────────────────────────────────────────
+  if (config.debug) {
+    console.log(chalk.magenta.bold('\n─── DEBUG: Querying Ollama ───'));
+    console.log(chalk.magenta(`  Model: ${config.model}`));
+    console.log(chalk.magenta(`  URL: ${config.ollamaUrl}`));
+    console.log(chalk.magenta(`  Command: ${parsed.command}`));
+    if (historyContext) {
+      console.log(chalk.magenta(`  History context: included`));
+    }
+  }
+
   let action;
   try {
     action = await queryOllama({
@@ -342,6 +367,11 @@ async function main() {
   }
 
   // ── Step 5: Preview / confirm / execute ──────────────────────────────────
+  if (config.debug) {
+    console.log(chalk.magenta.bold('\n─── DEBUG: Parsed action from LLM ───'));
+    console.log(chalk.magenta(JSON.stringify(action, null, 2)));
+  }
+
   previewAction(action, tabs);
 
   // Dry run — stop after preview
@@ -369,7 +399,7 @@ async function main() {
 
   // Destructive actions — require confirmation unless -y
   if (isDestructive(action)) {
-    if (!parsed.yes) {
+    if (!parsed.yes && config.confirmDestructive) {
       const ok = await confirm(chalk.yellow('\nConfirm? (y/n) '));
       if (!ok) {
         console.log(chalk.dim('Cancelled.'));

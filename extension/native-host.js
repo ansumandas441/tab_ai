@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/Users/primetrce/.nvm/versions/node/v24.13.0/bin/node
 
 /*
  * tabai native messaging host + HTTP bridge server

@@ -424,6 +424,18 @@ async function handleAction(msg) {
       return { id, result: { opened: opened.length, tabs: opened } };
     }
 
+    case "open_new_tabs": {
+      const count = p.count || 1;
+      const opened = [];
+      for (let i = 0; i < count; i++) {
+        const tab = await chrome.tabs.create({ active: i === 0 });
+        tabIndex[tab.id] = compact(tab);
+        opened.push(compact(tab));
+      }
+      await flushIndex();
+      return { id, result: { opened: opened.length, tabs: opened } };
+    }
+
     case "bookmark_tabs": {
       const targets = await resolveTargets(p.targets);
       if (targets.length === 0) return { id, error: "No matching tabs to bookmark" };

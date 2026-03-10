@@ -16,6 +16,7 @@ export async function executeAction(action, config) {
     case 'close_all_except':
     case 'open_url':
     case 'open_urls':
+    case 'open_new_tabs':
     case 'bookmark_tabs':
     case 'group_tabs':
     case 'mute_tabs':
@@ -28,12 +29,12 @@ export async function executeAction(action, config) {
     case 'reload_tabs':
     case 'discard_tabs':
     case 'save_session':
-      return postAction(base, action);
+      return postAction(base, action, config.debug);
 
     // ── Restore actions POST to /action as well ──────────────────────────
     case 'restore_last_closed':
     case 'restore_session':
-      return postAction(base, action);
+      return postAction(base, action, config.debug);
 
     // ── Read-only GET endpoints ───────────────────────────────────────────
     case 'list_bookmarks': {
@@ -101,6 +102,11 @@ export function formatResult(action, result) {
     case 'open_urls': {
       const n = action.urls?.length ?? 0;
       return `Opened ${n} URL${n !== 1 ? 's' : ''}`;
+    }
+
+    case 'open_new_tabs': {
+      const n = action.count ?? 1;
+      return `Opened ${n} new tab${n !== 1 ? 's' : ''}`;
     }
 
     case 'bookmark_tabs': {
@@ -192,9 +198,19 @@ export function formatResult(action, result) {
  * Convert a flat action object from the model into the { action, params }
  * shape the bridge's POST /action endpoint expects, then POST it.
  */
-async function postAction(base, action) {
+async function postAction(base, action, debug) {
   const { action: actionName, ...params } = action;
-  return postJson(`${base}/action`, { action: actionName, params });
+  const payload = { action: actionName, params };
+  if (debug) {
+    console.log('\x1b[35m\x1b[1m\n─── DEBUG: POST to bridge ───\x1b[0m');
+    console.log('\x1b[35m' + JSON.stringify(payload, null, 2) + '\x1b[0m');
+  }
+  const result = await postJson(`${base}/action`, payload);
+  if (debug) {
+    console.log('\x1b[35m\x1b[1m\n─── DEBUG: Bridge response ───\x1b[0m');
+    console.log('\x1b[35m' + JSON.stringify(result, null, 2) + '\x1b[0m');
+  }
+  return result;
 }
 
 async function postJson(url, body) {

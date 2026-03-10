@@ -11,7 +11,7 @@ npm install
 npm link
 
 # 2. Pull the Ollama model
-ollama pull qwen3.5:4b
+ollama pull qwen3.5:0.8b
 
 # 3. Load the Chrome extension
 #    Open chrome://extensions
@@ -114,7 +114,7 @@ Replace `/path/to/browser_assistant` with your actual path, and `YOUR_EXTENSION_
 ### 5. Pull the Ollama model
 
 ```sh
-ollama pull qwen3.5:4b
+ollama pull qwen3.5:0.8b
 ```
 
 Ensure Ollama is running (it starts automatically on macOS; on Linux run `ollama serve`).
@@ -223,7 +223,7 @@ Settings live in `tabai/config.json`:
 ```json
 {
   "ollamaUrl": "http://localhost:11434",
-  "model": "qwen3.5:4b",
+  "model": "qwen3.5:0.8b",
   "think": false,
   "bridgePort": 9999,
   "confirmDestructive": true
@@ -305,7 +305,7 @@ Or change the port in `config.json` and set `TABAI_PORT` accordingly.
 
 - Make sure Ollama is running: `ollama serve`
 - Verify the model is pulled: `ollama list`
-- Pull it if missing: `ollama pull qwen3.5:4b`
+- Pull it if missing: `ollama pull qwen3.5:0.8b`
 - Check that `ollamaUrl` in `config.json` matches your Ollama server address
 
 ### "command not found: tabai"
