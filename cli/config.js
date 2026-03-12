@@ -6,7 +6,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const DEFAULTS = {
+  provider: 'ollama',
   ollamaUrl: 'http://localhost:11434',
+  vllmUrl: 'http://localhost:8000',
   model: 'qwen3.5:0.8b',
   think: false,
   bridgePort: 9999,

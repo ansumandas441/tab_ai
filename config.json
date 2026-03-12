@@ -1,6 +1,8 @@
 {
+  "provider": "ollama",
   "ollamaUrl": "http://localhost:11434",
-  "model": "qwen3.5:0.8b",
+  "vllmUrl": "http://localhost:8000",
+  "model": "qwen3.5:2b",
   "think": false,
   "bridgePort": 9999,
   "confirmDestructive": false,
