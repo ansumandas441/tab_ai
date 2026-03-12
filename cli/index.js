@@ -148,6 +148,10 @@ function previewAction(action, tabs) {
       break;
     }
 
+    case 'close_duplicates':
+      console.log(chalk.red.bold(`\nWill close duplicate tabs (keeping ${action.keep ?? 'first'} of each URL)`));
+      break;
+
     case 'open_url':
       console.log(chalk.cyan(`\nWill open: ${action.url}`));
       break;
@@ -380,13 +384,24 @@ async function main() {
       history: historyContext || undefined,
     });
   } catch (err) {
-    if (err instanceof OllamaError) {
-      console.error(chalk.red(`Ollama not running at ${config.ollamaUrl}`));
-      if (err.message) console.error(chalk.red.dim(err.message));
-    } else {
-      console.error(chalk.red(`Unexpected error: ${err.message}`));
+    // Fallback for search-type commands when JSON parsing fails entirely
+    const lCmd = parsed.command.toLowerCase();
+    if (/\b(search|find|look\s+for)\b/.test(lCmd) && err instanceof OllamaError && err.message.includes('invalid JSON')) {
+      const searchTerms = lCmd.replace(/\b(search|find|look\s+for|my|tabs?|in|for|the|all|please)\b/g, '').trim();
+      if (searchTerms) {
+        action = { action: 'search_content', query: searchTerms };
+        if (config.debug) console.log(chalk.hex('#b388ff')(`[fallback] JSON parse failed, falling back to search_content for "${searchTerms}"`));
+      }
     }
-    process.exit(1);
+    if (!action) {
+      if (err instanceof OllamaError) {
+        console.error(chalk.red(`Ollama not running at ${config.ollamaUrl}`));
+        if (err.message) console.error(chalk.red.dim(err.message));
+      } else {
+        console.error(chalk.red(`Unexpected error: ${err.message}`));
+      }
+      process.exit(1);
+    }
   }
 
   // ── Step 5: Remap sequential IDs → real Chrome tab IDs ──────────────────
@@ -395,6 +410,126 @@ async function main() {
   if (config.debug) {
     console.log(chalk.magenta.bold('\n─── DEBUG: Parsed action from LLM (after ID remap) ───'));
     console.log(chalk.magenta(JSON.stringify(action, null, 2)));
+  }
+
+  // ── Client-side validation (defense in depth for small LLMs) ────────────
+  {
+    const cmd = parsed.command.toLowerCase();
+    const domainWords = ['github','youtube','google','stackoverflow','reddit','twitter','facebook','linkedin','slack','notion','figma','vercel','netlify'];
+
+    // Informational question override — questions about tabs should answer, not act
+    const isDomainQuery = domainWords.some(d => cmd.toLowerCase().includes(d));
+    if (/^(what|which|show me|list|tell|are there|do i have)\b/i.test(cmd) && /\btabs?\b/i.test(cmd) &&
+        (action.action !== 'answer' || isDomainQuery) && action.action !== 'search_content') {
+      const domainFilter = domainWords.find(d => cmd.toLowerCase().includes(d));
+      let matching = tabs;
+      if (domainFilter) matching = tabs.filter(t => ((t.title||'')+ ' ' + (t.url||'')).toLowerCase().includes(domainFilter));
+      const label = domainFilter ? `${domainFilter} ` : '';
+      if (matching.length === 0) {
+        action = { action: 'answer', text: `No ${label}tabs found.` };
+      } else {
+        const list = matching.slice(0, 30).map(t => `  ${t.title || 'Untitled'} | ${t.url ? new URL(t.url).hostname : 'unknown'}`).join('\n');
+        action = { action: 'answer', text: `${matching.length} ${label}tab${matching.length !== 1 ? 's' : ''} open:\n${list}` };
+      }
+      if (config.debug) console.log(chalk.hex('#b388ff')(`[validate] Overrode ${action.action} → answer for informational query`));
+    }
+
+    // Counting question override
+    if (/how many|count\s.*tab|number of\s.*tab/i.test(cmd) && action.action !== 'answer') {
+      action = { action: 'answer', text: `You have ${tabs.length} tabs open.` };
+    }
+
+    // Navigation intent override — "go to", "switch to", "navigate to" + positional word should activate, not answer
+    if (action.action === 'answer' && /\b(go\s+to|switch\s+to|navigate\s+to|focus|activate)\b/i.test(cmd) && /\btab\b/i.test(cmd)) {
+      const positionalMap = { first: 0, second: 1, third: 2, fourth: 3, fifth: 4, last: -1, previous: -1, prev: -1 };
+      const posMatch = cmd.match(/\b(first|second|third|fourth|fifth|last|previous|prev)\b/i);
+      if (posMatch) {
+        const pos = positionalMap[posMatch[1].toLowerCase()];
+        const targetIdx = pos === -1 ? tabs.length - 1 : pos;
+        if (targetIdx >= 0 && targetIdx < tabs.length) {
+          action = { action: 'activate_tab', target: tabs[targetIdx].id };
+          if (config.debug) console.log(chalk.hex('#b388ff')(`[validate] Overrode answer → activate_tab for positional navigation (${posMatch[1]} → tab index ${targetIdx})`));
+        }
+      }
+    }
+
+    // activate_tab relevance check
+    if (action.action === 'activate_tab') {
+      const stopWords = new Set(['open','switch','go','to','focus','activate','the','tab','with','about','a','my','me','on','in','for',
+        'first','second','third','fourth','fifth','sixth','seventh','eighth','ninth','tenth',
+        'last','next','previous','prev','1st','2nd','3rd','4th','5th',
+        'number','num','no','that','this','current','other','another','one','two','three']);
+      const keywords = cmd.split(/\s+/).filter(w => w.length > 1 && !stopWords.has(w));
+      const targetId = action.target ?? action.targets;
+      const tab = tabs.find(t => t.id === targetId);
+      if (tab && keywords.length > 0) {
+        const haystack = ((tab.title || '') + ' ' + (tab.url || '')).toLowerCase();
+        const matches = keywords.some(kw => haystack.includes(kw));
+        if (!matches) {
+          action = { action: 'answer', text: 'No matching tab found for your query.' };
+        }
+      }
+    }
+
+    // open_url override — "open the tab with X" means existing tab, not new URL
+    if (action.action === 'open_url' && /\b(the\s+tab|tab\s+with|tab\s+about|my\s+\w+\s+tab)\b/i.test(cmd)) {
+      const stopWords = new Set(['open','the','tab','with','about','a','my','go','to','switch','please','that','is','on']);
+      const keywords = cmd.toLowerCase().split(/\s+/).filter(w => w.length > 2 && !stopWords.has(w));
+      const found = tabs.find(t => {
+        const hay = ((t.title||'')+ ' ' + (t.url||'')).toLowerCase();
+        return keywords.some(kw => hay.includes(kw));
+      });
+      if (found) {
+        action = { action: 'activate_tab', target: found.id };
+      } else {
+        action = { action: 'answer', text: `No open tab matches "${keywords.join(' ')}". Say "open <site>" (without "tab") to open a new page.` };
+      }
+    }
+
+    // close_all_except correction — "close all X tabs" should close X tabs, not everything except X
+    if (action.action === 'close_all_except' && /\bclose\b/i.test(cmd)) {
+      const closeDomain = domainWords.find(d => cmd.toLowerCase().includes(d));
+      if (closeDomain) {
+        const domainTabs = tabs.filter(t => ((t.title||'')+ ' ' + (t.url||'')).toLowerCase().includes(closeDomain));
+        if (domainTabs.length > 0) {
+          if (config.debug) console.log(chalk.hex('#b388ff')(`[validate] Corrected close_all_except → close_tabs targeting ${domainTabs.length} ${closeDomain} tabs`));
+          action = { action: 'close_tabs', targets: domainTabs.map(t => t.id), reason: `Close ${closeDomain} tabs` };
+        }
+      }
+    }
+
+    // Domain filtering correction — if domain mentioned but LLM selected too many tabs, filter
+    const mentionedDomain = domainWords.find(d => cmd.toLowerCase().includes(d));
+    if (mentionedDomain && Array.isArray(action.targets) && tabs.length > 1) {
+      const matchingTabs = tabs.filter(t => ((t.title||'')+ ' ' + (t.url||'')).toLowerCase().includes(mentionedDomain));
+      if (matchingTabs.length > 0 && action.targets.length > matchingTabs.length) {
+        console.log(chalk.yellow(`\n⚠ Corrected: LLM selected ${action.targets.length} tabs but only ${matchingTabs.length} match "${mentionedDomain}". Filtering.`));
+        action.targets = matchingTabs.map(t => t.id);
+      }
+    }
+
+    // Upgrade search commands — when user wants to search and got unhelpful answer, try RAG
+    if (action.action === 'answer' && /\b(search|find|look\s+for)\b/i.test(cmd) && /\btabs?\b/i.test(cmd)) {
+      const answerText = (action.text || '').toLowerCase();
+      if (answerText.includes('no tab') || answerText.includes('not found') || answerText.includes('no matching')) {
+        const searchStopWords = new Set(['search','find','look','for','my','tabs','tab','in','the','all','please','any','a','about','do','i','have']);
+        const searchTerms = cmd.split(/\s+/).filter(w => w.length > 1 && !searchStopWords.has(w)).join(' ');
+        if (searchTerms) {
+          if (config.debug) console.log(chalk.hex('#b388ff')(`[validate] Upgraded unhelpful answer → search_content for "${searchTerms}"`));
+          action = { action: 'search_content', query: searchTerms };
+        }
+      }
+    }
+
+    // Upgrade search_tabs to search_content when no tab titles/URLs match the query
+    if (action.action === 'search_tabs' && action.query) {
+      const q = action.query.toLowerCase();
+      const titleMatch = tabs.some(t => ((t.title||'')+ ' ' + (t.url||'')).toLowerCase().includes(q));
+      if (!titleMatch) {
+        if (config.debug) console.log(chalk.hex('#b388ff')(`[validate] Upgraded search_tabs → search_content (no title/URL match for "${q}")`));
+        action = { action: 'search_content', query: action.query };
+      }
+    }
   }
 
   previewAction(action, tabs);
