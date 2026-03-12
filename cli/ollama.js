@@ -28,10 +28,13 @@ Available actions:
 {"action":"list_history"}
 {"action":"search_history","query":"search term"}
 {"action":"list_sessions"}
+{"action":"index_tabs","targets":"all"}
+{"action":"index_tabs","targets":[tabId,...]}
 {"action":"summarize_tab","target":"current"}
 {"action":"summarize_tab","target":tabId}
 {"action":"search_content","query":"search terms"}
 {"action":"open_from_search","query":"search terms"}
+{"action":"open_from_search","query":"search terms","all":true}
 
 Rules:
 - Use exact tab IDs from the provided tab list
@@ -42,9 +45,12 @@ Rules:
 - For close commands ONLY (words like "close", "delete", "remove", "kill"), use close_tabs
 - For "close everything except" use close_all_except with the keep list
 - IMPORTANT: "mention", "list", "show", "tell me", "which tabs", "what tabs", "find" are informational queries — use answer (with the matching tab info as text) or search_tabs. NEVER use close_tabs for informational queries.
+- For "read all tabs", "index all tabs", "load tabs into context", "get tab content", use index_tabs to extract and index page content into RAG. Use targets "all" or specific tab IDs.
+- For "read this tab" or "index tab X", use index_tabs with the specific tab ID(s)
 - For "summarize this tab/page" or "what is this page about", use summarize_tab with target "current" (or a specific tabId)
-- For "find the article about X", "search my pages about X", or "which page was about X", use search_content to search indexed page content
-- For "open the article about X" or "open the page that was about X", use open_from_search to find and open a previously visited page
+- IMPORTANT: When the user says "open the tab/page that talks about X", "open tab about X", "open tab having content X", "open page related to X", "switch to the tab about X", "go to the page about X" — ALWAYS use open_from_search. This activates the matching tab in Chrome.
+- IMPORTANT: Only use search_content when the user explicitly wants to SEARCH or LIST results (e.g. "search my pages about X", "find articles about X", "which page was about X"). If the user says "open" or "go to" or "switch to", use open_from_search instead.
+- For "open ALL tabs about X" or "open all pages having content X", use open_from_search with "all":true to open every matching page
 - For search/answer queries where no action applies, use answer
 - For restore_session, use "label" to match by name or "index" for position (0 = most recent)
 - Return ONLY the JSON object, nothing else`;
@@ -83,9 +89,9 @@ export async function queryOllama({ command, tabsFormatted, config, history }) {
     },
   };
 
-  // Some Ollama versions support options.think — include it to suppress thinking
+  // Disable thinking for qwen3.5 and similar models — set at top level (Ollama API)
   if (config.think === false) {
-    body.options.think = false;
+    body.think = false;
   }
 
   let response;

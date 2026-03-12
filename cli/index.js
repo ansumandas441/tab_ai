@@ -222,6 +222,13 @@ function previewAction(action, tabs) {
       console.log(chalk.cyan(`\nWill restore session "${action.label ?? action.index ?? '(most recent)'}"`));
       break;
 
+    case 'index_tabs': {
+      const t = action.targets;
+      const desc = t === 'all' ? 'all tabs' : (Array.isArray(t) ? `${t.length} tab${t.length !== 1 ? 's' : ''}` : `tab ${t}`);
+      console.log(chalk.cyan(`\nWill index ${desc} into RAG`));
+      break;
+    }
+
     case 'summarize_tab':
       console.log(chalk.cyan(`\nWill summarize tab ${action.target || 'current'}`));
       break;
@@ -231,7 +238,7 @@ function previewAction(action, tabs) {
       break;
 
     case 'open_from_search':
-      console.log(chalk.cyan(`\nWill find and open a page matching "${action.query}"`));
+      console.log(chalk.cyan(`\nWill find and open ${action.all ? 'all pages' : 'a page'} matching "${action.query}"`));
       break;
 
     case 'answer':

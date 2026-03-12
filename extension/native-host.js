@@ -289,6 +289,27 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // POST /rag/index — extract and index content from tabs into RAG
+    if (req.method === "POST" && path === "/rag/index") {
+      const body = await readBody(req);
+      const targets = body.targets || body.target || "all";
+      try {
+        const result = await requestExtension("extract_tabs_content", { targets });
+        const indexed = result.indexed || [];
+        const failed = result.failed || [];
+        let count = 0;
+        for (const doc of indexed) {
+          rag.indexDocument({ url: doc.url, title: doc.title, text: doc.text });
+          count++;
+        }
+        log("Indexed " + count + " tabs (" + failed.length + " failed)");
+        sendJSON(res, 200, { ok: true, indexed: count, failed: failed.length, details: { indexed: indexed.map(d => ({ url: d.url, title: d.title })), failed } });
+      } catch (e) {
+        sendJSON(res, 500, { ok: false, error: e.message });
+      }
+      return;
+    }
+
     // POST /rag/summarize — extract content from a tab and summarize via Ollama
     if (req.method === "POST" && path === "/rag/summarize") {
       const body = await readBody(req);

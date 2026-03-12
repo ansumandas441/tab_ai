@@ -870,6 +870,30 @@ async function handleAction(msg) {
       return { id, result: content };
     }
 
+    case "extract_tabs_content": {
+      const targets = await resolveTargets(p.targets || "all");
+      if (targets.length === 0) return { id, error: "No matching tabs" };
+      const indexed = [];
+      const failed = [];
+      for (const tab of targets) {
+        if (!shouldIndex(tab.url)) {
+          failed.push({ id: tab.id, title: tab.title, reason: "restricted URL" });
+          continue;
+        }
+        try {
+          const content = await extractContent(tab.id);
+          if (content && content.text) {
+            indexed.push({ url: content.url, title: content.title, text: content.text });
+          } else {
+            failed.push({ id: tab.id, title: tab.title, reason: "could not extract content" });
+          }
+        } catch (e) {
+          failed.push({ id: tab.id, title: tab.title, reason: e.message || "extraction error" });
+        }
+      }
+      return { id, result: { indexed, failed } };
+    }
+
     /* ---------- Utility ---------- */
 
     case "answer": {
