@@ -3,7 +3,7 @@
 import chalk from 'chalk';
 import { createInterface } from 'node:readline';
 import { loadConfig } from './config.js';
-import { formatTabs, formatHistory, formatSessions } from './format.js';
+import { formatTabs, remapActionIds, formatHistory, formatSessions } from './format.js';
 import { queryOllama, OllamaError } from './ollama.js';
 import { executeAction, isDestructive, formatResult, BridgeError } from './actions.js';
 import { showHistory, showSessions } from './history.js';
@@ -314,14 +314,16 @@ async function main() {
     process.exit(1);
   }
 
-  // ── Step 2: Format tabs compactly ────────────────────────────────────────
-  const tabsFormatted = formatTabs(tabs);
+  // ── Step 2: Format tabs compactly (sequential IDs for the LLM) ──────────
+  const { text: tabsFormatted, idMap } = formatTabs(tabs);
 
   if (config.debug) {
     console.log(chalk.magenta.bold('\n─── DEBUG: Tabs from bridge ───'));
     console.log(chalk.magenta(JSON.stringify(tabs, null, 2)));
     console.log(chalk.magenta.bold('\n─── DEBUG: Formatted tabs sent to LLM ───'));
     console.log(chalk.magenta(tabsFormatted));
+    console.log(chalk.magenta.bold('\n─── DEBUG: ID map (sequential → Chrome) ───'));
+    console.log(chalk.magenta(JSON.stringify(idMap)));
   }
 
   // ── Step 3: Fetch optional history context for relevant commands ─────────
@@ -387,9 +389,11 @@ async function main() {
     process.exit(1);
   }
 
-  // ── Step 5: Preview / confirm / execute ──────────────────────────────────
+  // ── Step 5: Remap sequential IDs → real Chrome tab IDs ──────────────────
+  action = remapActionIds(action, idMap);
+
   if (config.debug) {
-    console.log(chalk.magenta.bold('\n─── DEBUG: Parsed action from LLM ───'));
+    console.log(chalk.magenta.bold('\n─── DEBUG: Parsed action from LLM (after ID remap) ───'));
     console.log(chalk.magenta(JSON.stringify(action, null, 2)));
   }
 

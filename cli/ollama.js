@@ -37,7 +37,7 @@ Available actions:
 {"action":"open_from_search","query":"search terms","all":true}
 
 Rules:
-- Use exact tab IDs from the provided tab list
+- Tabs are numbered [1], [2], [3], etc. Use these numbers as tab IDs in your response
 - Always pick the closest matching action — never refuse with "answer" if an action can handle it
 - For "open tabs" / "new tabs" without specific URLs, use open_new_tabs
 - For "open <site>" without a full URL, infer the URL (e.g. "open youtube" → open_url with "https://www.youtube.com")
