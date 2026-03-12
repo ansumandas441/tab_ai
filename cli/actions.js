@@ -58,6 +58,25 @@ export async function executeAction(action, config) {
     case 'list_sessions':
       return getJson(`${base}/sessions`);
 
+    // ── RAG actions ───────────────────────────────────────────────────────
+    case 'summarize_tab':
+      return postJson(`${base}/rag/summarize`, {
+        target: action.target || 'current'
+      });
+
+    case 'search_content':
+      return getJson(`${base}/rag/search?q=${encodeURIComponent(action.query || '')}&limit=${action.limit || 5}`);
+
+    case 'open_from_search': {
+      const searchResult = await getJson(`${base}/rag/search?q=${encodeURIComponent(action.query || '')}&limit=1`);
+      const results = searchResult?.results || [];
+      if (results.length === 0) {
+        return { text: `No indexed pages found matching "${action.query}"` };
+      }
+      const topUrl = results[0].url;
+      return postJson(`${base}/action`, { action: 'open_url', params: { url: topUrl } });
+    }
+
     // ── Purely local actions (no bridge call) ─────────────────────────────
     case 'search_tabs':
       // The model already resolved matching tabs in its answer; nothing to call.
@@ -184,6 +203,23 @@ export function formatResult(action, result) {
     case 'list_sessions':
       return formatSessionsResult(result);
 
+    case 'summarize_tab':
+      return result?.summary || result?.text || 'Summary not available';
+
+    case 'search_content': {
+      const items = result?.results || [];
+      if (items.length === 0) return `No indexed pages found matching "${action.query}"`;
+      const lines = items.map((r, i) =>
+        `  ${i + 1}. ${r.title || 'Untitled'} (${extractDomain(r.url)}) [score: ${r.score.toFixed(2)}]\n     ${r.snippet || ''}`
+      );
+      return [`Content search for "${action.query}" (${items.length} results):`, ...lines].join('\n');
+    }
+
+    case 'open_from_search': {
+      if (result?.text) return result.text; // "No indexed pages found..."
+      return `Opened page matching "${action.query}"`;
+    }
+
     case 'answer':
       return action.text ?? result?.text ?? '';
 
@@ -236,6 +272,15 @@ async function getJson(url) {
 }
 
 // ── Result formatting helpers ────────────────────────────────────────────────
+
+function extractDomain(url) {
+  if (!url) return '?';
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return url.slice(0, 40);
+  }
+}
 
 function formatBookmarksResult(result, filter) {
   const items = Array.isArray(result) ? result : (result?.bookmarks ?? []);

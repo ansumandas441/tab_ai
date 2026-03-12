@@ -222,6 +222,18 @@ function previewAction(action, tabs) {
       console.log(chalk.cyan(`\nWill restore session "${action.label ?? action.index ?? '(most recent)'}"`));
       break;
 
+    case 'summarize_tab':
+      console.log(chalk.cyan(`\nWill summarize tab ${action.target || 'current'}`));
+      break;
+
+    case 'search_content':
+      console.log(chalk.cyan(`\nSearching indexed page content for "${action.query}"`));
+      break;
+
+    case 'open_from_search':
+      console.log(chalk.cyan(`\nWill find and open a page matching "${action.query}"`));
+      break;
+
     case 'answer':
       console.log(chalk.yellow(`\n${action.text}`));
       break;
@@ -254,6 +266,8 @@ const INFORMATIONAL_ACTIONS = new Set([
   'list_history',
   'search_history',
   'list_sessions',
+  'summarize_tab',
+  'search_content',
 ]);
 
 // ── Main ─────────────────────────────────────────────────────────────────────

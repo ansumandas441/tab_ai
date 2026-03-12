@@ -28,6 +28,10 @@ Available actions:
 {"action":"list_history"}
 {"action":"search_history","query":"search term"}
 {"action":"list_sessions"}
+{"action":"summarize_tab","target":"current"}
+{"action":"summarize_tab","target":tabId}
+{"action":"search_content","query":"search terms"}
+{"action":"open_from_search","query":"search terms"}
 
 Rules:
 - Use exact tab IDs from the provided tab list
@@ -38,6 +42,9 @@ Rules:
 - For close commands ONLY (words like "close", "delete", "remove", "kill"), use close_tabs
 - For "close everything except" use close_all_except with the keep list
 - IMPORTANT: "mention", "list", "show", "tell me", "which tabs", "what tabs", "find" are informational queries — use answer (with the matching tab info as text) or search_tabs. NEVER use close_tabs for informational queries.
+- For "summarize this tab/page" or "what is this page about", use summarize_tab with target "current" (or a specific tabId)
+- For "find the article about X", "search my pages about X", or "which page was about X", use search_content to search indexed page content
+- For "open the article about X" or "open the page that was about X", use open_from_search to find and open a previously visited page
 - For search/answer queries where no action applies, use answer
 - For restore_session, use "label" to match by name or "index" for position (0 = most recent)
 - Return ONLY the JSON object, nothing else`;
