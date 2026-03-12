@@ -34,8 +34,10 @@ Rules:
 - Always pick the closest matching action — never refuse with "answer" if an action can handle it
 - For "open tabs" / "new tabs" without specific URLs, use open_new_tabs
 - For "open <site>" without a full URL, infer the URL (e.g. "open youtube" → open_url with "https://www.youtube.com")
-- For close commands, identify matching tabs by title/URL keywords and use close_tabs
+- IMPORTANT: "select", "switch to", "go to", "focus", "activate" a tab means activate_tab — NOT close_tabs
+- For close commands ONLY (words like "close", "delete", "remove", "kill"), use close_tabs
 - For "close everything except" use close_all_except with the keep list
+- IMPORTANT: "mention", "list", "show", "tell me", "which tabs", "what tabs", "find" are informational queries — use answer (with the matching tab info as text) or search_tabs. NEVER use close_tabs for informational queries.
 - For search/answer queries where no action applies, use answer
 - For restore_session, use "label" to match by name or "index" for position (0 = most recent)
 - Return ONLY the JSON object, nothing else`;
