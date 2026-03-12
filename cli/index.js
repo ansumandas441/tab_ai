@@ -4,7 +4,7 @@ import chalk from 'chalk';
 import { createInterface } from 'node:readline';
 import { loadConfig } from './config.js';
 import { formatTabs, formatHistory, formatSessions } from './format.js';
-import { queryOllama, OllamaError } from './ollama.js';
+import { queryLLM, LLMError } from './llm.js';
 import { executeAction, isDestructive, formatResult, BridgeError } from './actions.js';
 import { showHistory, showSessions } from './history.js';
 
@@ -17,8 +17,10 @@ function parseArgs(argv) {
     yes: false,
     dryRun: false,
     debug: false,
+    provider: undefined,
     model: undefined,
     ollamaUrl: undefined,
+    vllmUrl: undefined,
     subcommand: null,
     full: false,
   };
@@ -45,6 +47,16 @@ function parseArgs(argv) {
       parsed.ollamaUrl = args[i];
     } else if (arg.startsWith('--ollama-url=')) {
       parsed.ollamaUrl = arg.split('=').slice(1).join('=');
+    } else if (arg === '--provider') {
+      i++;
+      parsed.provider = args[i];
+    } else if (arg.startsWith('--provider=')) {
+      parsed.provider = arg.split('=').slice(1).join('=');
+    } else if (arg === '--vllm-url') {
+      i++;
+      parsed.vllmUrl = args[i];
+    } else if (arg.startsWith('--vllm-url=')) {
+      parsed.vllmUrl = arg.split('=').slice(1).join('=');
     } else if (arg === '--full') {
       parsed.full = true;
     } else if (arg === '--help' || arg === '-h') {
@@ -86,8 +98,10 @@ ${chalk.bold('Flags:')}
   -y, --yes, --no-confirm   Skip confirmation for destructive actions
   --dry-run                 Preview what would happen, don't execute
   --debug                   Show full LLM request/response and bridge calls
-  --model <name>            Override the Ollama model
+  --provider <name>         LLM provider: "ollama" (default) or "vllm"
+  --model <name>            Override the model (provider-specific format)
   --ollama-url <url>        Override the Ollama server URL
+  --vllm-url <url>          Override the vLLM server URL
   -h, --help                Show this help message
 
 ${chalk.bold('Examples:')}
@@ -262,7 +276,13 @@ async function main() {
   const parsed = parseArgs(process.argv);
 
   // Load config with CLI overrides
-  const config = await loadConfig({ model: parsed.model, ollamaUrl: parsed.ollamaUrl, debug: parsed.debug || undefined });
+  const config = await loadConfig({
+    provider: parsed.provider,
+    model: parsed.model,
+    ollamaUrl: parsed.ollamaUrl,
+    vllmUrl: parsed.vllmUrl,
+    debug: parsed.debug || undefined,
+  });
 
   // ── Subcommands (no model call) ──────────────────────────────────────────
   if (parsed.subcommand === 'history') {
@@ -337,11 +357,14 @@ async function main() {
     }
   }
 
-  // ── Step 4: Query Ollama ─────────────────────────────────────────────────
+  // ── Step 4: Query LLM ──────────────────────────────────────────────────
+  const providerLabel = config.provider === 'vllm' ? 'vLLM' : 'Ollama';
+  const providerUrl = config.provider === 'vllm' ? config.vllmUrl : config.ollamaUrl;
   if (config.debug) {
-    console.log(chalk.magenta.bold('\n─── DEBUG: Querying Ollama ───'));
+    console.log(chalk.magenta.bold(`\n─── DEBUG: Querying ${providerLabel} ───`));
+    console.log(chalk.magenta(`  Provider: ${config.provider}`));
     console.log(chalk.magenta(`  Model: ${config.model}`));
-    console.log(chalk.magenta(`  URL: ${config.ollamaUrl}`));
+    console.log(chalk.magenta(`  URL: ${providerUrl}`));
     console.log(chalk.magenta(`  Command: ${parsed.command}`));
     if (historyContext) {
       console.log(chalk.magenta(`  History context: included`));
@@ -350,15 +373,15 @@ async function main() {
 
   let action;
   try {
-    action = await queryOllama({
+    action = await queryLLM({
       command: parsed.command,
       tabsFormatted,
       config,
       history: historyContext || undefined,
     });
   } catch (err) {
-    if (err instanceof OllamaError) {
-      console.error(chalk.red(`Ollama not running at ${config.ollamaUrl}`));
+    if (err instanceof LLMError) {
+      console.error(chalk.red(`${providerLabel} not running at ${providerUrl}`));
       if (err.message) console.error(chalk.red.dim(err.message));
     } else {
       console.error(chalk.red(`Unexpected error: ${err.message}`));

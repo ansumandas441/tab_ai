@@ -1,6 +1,6 @@
 # tabai
 
-tabai is a CLI tool that lets you control Google Chrome from your terminal using plain English. It connects a local Ollama language model to your browser via a Chrome extension and native messaging bridge, so you can close tabs, organize bookmarks, restore sessions, and more — all without touching the mouse.
+tabai is a CLI tool that lets you control Google Chrome from your terminal using plain English. It connects a local LLM (Ollama or vLLM) to your browser via a Chrome extension and native messaging bridge, so you can close tabs, organize bookmarks, restore sessions, and more — all without touching the mouse.
 
 ## Quick Start
 
@@ -45,7 +45,8 @@ t "group tabs by domain"
 
 - **Node.js** v18 or later
 - **Google Chrome** (or Chromium-based browser)
-- **Ollama** installed and running locally (https://ollama.com)
+- **Ollama** installed and running locally (https://ollama.com), **or**
+- **vLLM** v0.17.0+ serving a compatible model (https://docs.vllm.ai)
 
 ## Setup
 
@@ -111,13 +112,32 @@ cp /path/to/browser_assistant/tabai/extension/com.tabai.bridge.json \
 
 Replace `/path/to/browser_assistant` with your actual path, and `YOUR_EXTENSION_ID` with the ID from step 3.
 
-### 5. Pull the Ollama model
+### 5. Set up an LLM provider
+
+**Option A — Ollama (default):**
 
 ```sh
 ollama pull qwen3.5:0.8b
 ```
 
 Ensure Ollama is running (it starts automatically on macOS; on Linux run `ollama serve`).
+
+**Option B — vLLM:**
+
+```sh
+vllm serve Qwen/Qwen3.5-0.8B --port 8000
+```
+
+Then set the provider in `tabai/config.json`:
+
+```json
+{
+  "provider": "vllm",
+  "model": "Qwen/Qwen3.5-0.8B"
+}
+```
+
+Or use CLI flags: `tabai --provider vllm --model Qwen/Qwen3.5-0.8B "your command"`.
 
 ### 6. Add a shell alias (optional but recommended)
 
@@ -222,7 +242,9 @@ Settings live in `tabai/config.json`:
 
 ```json
 {
+  "provider": "ollama",
   "ollamaUrl": "http://localhost:11434",
+  "vllmUrl": "http://localhost:8000",
   "model": "qwen3.5:0.8b",
   "think": false,
   "bridgePort": 9999,
@@ -230,7 +252,30 @@ Settings live in `tabai/config.json`:
 }
 ```
 
+| Field | Description |
+|-------|-------------|
+| `provider` | LLM backend: `"ollama"` (default) or `"vllm"` |
+| `ollamaUrl` | Ollama server URL |
+| `vllmUrl` | vLLM server URL |
+| `model` | Model name (format depends on provider — see below) |
+| `think` | Pass `think` option to Ollama (no effect on vLLM) |
+| `bridgePort` | HTTP bridge port (default 9999) |
+| `confirmDestructive` | Prompt before destructive actions |
+
+### Model names by provider
+
+| Provider | 0.8B | 2B |
+|----------|------|----|
+| Ollama | `qwen3.5:0.8b` | `qwen3.5:2b` |
+| vLLM | `Qwen/Qwen3.5-0.8B` | `Qwen/Qwen3.5-2B` |
+
 ### Overrides
+
+Switch provider on the fly:
+
+```sh
+tabai --provider vllm --model Qwen/Qwen3.5-2B "close all reddit tabs"
+```
 
 Use a different model:
 
@@ -249,6 +294,12 @@ Use a different Ollama server:
 
 ```sh
 tabai --ollama-url http://192.168.1.50:11434 "group tabs by domain"
+```
+
+Use a different vLLM server:
+
+```sh
+tabai --provider vllm --vllm-url http://192.168.1.50:8000 "group tabs by domain"
 ```
 
 Change the bridge port (set both for bridge and CLI):
@@ -273,7 +324,7 @@ Terminal                 Bridge Server              Chrome Extension
   |                         |                            |
 ```
 
-1. The CLI sends your natural language command to Ollama, which returns a structured action.
+1. The CLI sends your natural language command to the configured LLM provider (Ollama or vLLM), which returns a structured action.
 2. The CLI sends the action to the bridge server on `localhost:9999` via HTTP.
 3. The bridge server forwards the action to the Chrome extension via native messaging.
 4. The extension executes the action using Chrome APIs and returns the result.
@@ -308,6 +359,12 @@ Or change the port in `config.json` and set `TABAI_PORT` accordingly.
 - Pull it if missing: `ollama pull qwen3.5:0.8b`
 - Check that `ollamaUrl` in `config.json` matches your Ollama server address
 
+### "vLLM connection refused"
+
+- Make sure vLLM is serving: `vllm serve Qwen/Qwen3.5-0.8B --port 8000`
+- Verify `provider` is set to `"vllm"` in `config.json` or via `--provider vllm`
+- Check that `vllmUrl` in `config.json` matches your vLLM server address (default: `http://localhost:8000`)
+
 ### "command not found: tabai"
 
 Run `npm link` again from the `tabai/cli` directory:
@@ -336,6 +393,7 @@ The extension rebuilds its tab index on startup. If tabs appear missing, reload 
 
 ### Actions seem slow
 
-- Use a smaller Ollama model for faster inference (e.g., `qwen3.5:1b`)
-- Ensure Ollama is using GPU acceleration: check `ollama ps`
+- Use a smaller model for faster inference (e.g., `qwen3.5:0.8b` on Ollama or `Qwen/Qwen3.5-0.8B` on vLLM)
+- Ensure your LLM is using GPU acceleration: check `ollama ps` for Ollama
+- vLLM generally has better throughput for sustained use; consider switching if latency is an issue
 - The native messaging roundtrip adds minimal latency; slowness is almost always model inference time

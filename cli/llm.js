@@ -40,8 +40,62 @@ Rules:
 - For restore_session, use "label" to match by name or "index" for position (0 = most recent)
 - Return ONLY the JSON object, nothing else`;
 
+// ── Provider adapters ─────────────────────────────────────────────────────────
+
+const PROVIDERS = {
+  ollama: {
+    label: 'Ollama',
+    buildUrl(config) {
+      return `${config.ollamaUrl}/api/chat`;
+    },
+    buildBody(config, messages) {
+      const body = {
+        model: config.model,
+        stream: false,
+        messages,
+        options: { temperature: 0 },
+      };
+      if (config.think === false) {
+        body.options.think = false;
+      }
+      return body;
+    },
+    parseResponse(data) {
+      return {
+        content: data.message?.content ?? data.response ?? '',
+        evalTokens: data.eval_count,
+        promptTokens: data.prompt_eval_count,
+      };
+    },
+  },
+
+  vllm: {
+    label: 'vLLM',
+    buildUrl(config) {
+      return `${config.vllmUrl}/v1/chat/completions`;
+    },
+    buildBody(config, messages) {
+      return {
+        model: config.model,
+        messages,
+        temperature: 0,
+        stream: false,
+      };
+    },
+    parseResponse(data) {
+      return {
+        content: data.choices?.[0]?.message?.content ?? '',
+        evalTokens: data.usage?.completion_tokens,
+        promptTokens: data.usage?.prompt_tokens,
+      };
+    },
+  },
+};
+
+// ── Main query function ───────────────────────────────────────────────────────
+
 /**
- * Send a command + tab context to Ollama and get back a parsed action object.
+ * Send a command + tab context to the configured LLM provider and get back a parsed action object.
  *
  * @param {object} params
  * @param {string} params.command - The natural language command from the user
@@ -50,10 +104,14 @@ Rules:
  * @param {string} [params.history] - Optional formatted history/session context
  * @returns {Promise<object>} Parsed action object from the model
  */
-export async function queryOllama({ command, tabsFormatted, config, history }) {
-  const debug = config.debug;
-  const url = `${config.ollamaUrl}/api/chat`;
+export async function queryLLM({ command, tabsFormatted, config, history }) {
+  const provider = PROVIDERS[config.provider];
+  if (!provider) {
+    throw new LLMError(`Unknown provider: "${config.provider}". Use "ollama" or "vllm".`);
+  }
 
+  const debug = config.debug;
+  const url = provider.buildUrl(config);
   const userContent = buildUserMessage(command, tabsFormatted, history);
 
   if (debug) {
@@ -62,22 +120,11 @@ export async function queryOllama({ command, tabsFormatted, config, history }) {
     console.log('\x1b[35m[USER]\x1b[0m', userContent);
   }
 
-  const body = {
-    model: config.model,
-    stream: false,
-    messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user', content: userContent },
-    ],
-    options: {
-      temperature: 0,
-    },
-  };
-
-  // Some Ollama versions support options.think — include it to suppress thinking
-  if (config.think === false) {
-    body.options.think = false;
-  }
+  const messages = [
+    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'user', content: userContent },
+  ];
+  const body = provider.buildBody(config, messages);
 
   let response;
   try {
@@ -87,22 +134,22 @@ export async function queryOllama({ command, tabsFormatted, config, history }) {
       body: JSON.stringify(body),
     });
   } catch (err) {
-    throw new OllamaError(`Cannot reach Ollama at ${config.ollamaUrl}: ${err.message}`);
+    throw new LLMError(`Cannot reach ${provider.label} at ${url}: ${err.message}`);
   }
 
   if (!response.ok) {
     const text = await response.text().catch(() => '');
-    throw new OllamaError(`Ollama returned HTTP ${response.status}: ${text.slice(0, 200)}`);
+    throw new LLMError(`${provider.label} returned HTTP ${response.status}: ${text.slice(0, 200)}`);
   }
 
   const data = await response.json();
-  const raw = data.message?.content ?? data.response ?? '';
+  const { content: raw, evalTokens, promptTokens } = provider.parseResponse(data);
 
   if (debug) {
     console.log('\x1b[35m\x1b[1m\n─── DEBUG: Raw LLM response ───\x1b[0m');
     console.log('\x1b[35m' + raw + '\x1b[0m');
-    if (data.eval_count) {
-      console.log(`\x1b[35m  Tokens: ${data.eval_count} eval, ${data.prompt_eval_count ?? '?'} prompt\x1b[0m`);
+    if (evalTokens) {
+      console.log(`\x1b[35m  Tokens: ${evalTokens} eval, ${promptTokens ?? '?'} prompt\x1b[0m`);
     }
   }
 
@@ -119,10 +166,10 @@ export async function queryOllama({ command, tabsFormatted, config, history }) {
   if (debug) console.log('\x1b[35m  [DEBUG] Code fence strip failed, retrying with model...\x1b[0m');
 
   // Second API call as a last resort — ask the model to fix its output
-  const retryParsed = await retryParse(config, raw);
+  const retryParsed = await retryParse(config, provider, raw);
   if (retryParsed) return retryParsed;
 
-  throw new OllamaError(
+  throw new LLMError(
     `Model returned invalid JSON after retry.\nRaw output:\n${raw.slice(0, 500)}`
   );
 }
@@ -186,21 +233,17 @@ function stripCodeFences(str) {
     .trim();
 }
 
-async function retryParse(config, badOutput) {
-  const url = `${config.ollamaUrl}/api/chat`;
+async function retryParse(config, provider, badOutput) {
+  const url = provider.buildUrl(config);
 
-  const body = {
-    model: config.model,
-    stream: false,
-    messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
-      {
-        role: 'user',
-        content: `Your previous response was not valid JSON. Here is what you returned:\n\n${badOutput.slice(0, 1000)}\n\nPlease return ONLY the corrected JSON object, nothing else.`,
-      },
-    ],
-    options: { temperature: 0 },
-  };
+  const messages = [
+    { role: 'system', content: SYSTEM_PROMPT },
+    {
+      role: 'user',
+      content: `Your previous response was not valid JSON. Here is what you returned:\n\n${badOutput.slice(0, 1000)}\n\nPlease return ONLY the corrected JSON object, nothing else.`,
+    },
+  ];
+  const body = provider.buildBody(config, messages);
 
   try {
     const response = await fetch(url, {
@@ -211,7 +254,7 @@ async function retryParse(config, badOutput) {
     if (!response.ok) return null;
 
     const data = await response.json();
-    const raw = data.message?.content ?? data.response ?? '';
+    const { content: raw } = provider.parseResponse(data);
     return tryParseJson(raw) || tryParseJson(stripCodeFences(raw));
   } catch {
     return null;
@@ -219,11 +262,11 @@ async function retryParse(config, badOutput) {
 }
 
 /**
- * Custom error class so callers can distinguish Ollama failures.
+ * Custom error class so callers can distinguish LLM failures.
  */
-export class OllamaError extends Error {
+export class LLMError extends Error {
   constructor(message) {
     super(message);
-    this.name = 'OllamaError';
+    this.name = 'LLMError';
   }
 }
