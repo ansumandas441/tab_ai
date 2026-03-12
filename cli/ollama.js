@@ -59,6 +59,7 @@ Rules:
 - IMPORTANT: Only use open_from_search when the user explicitly says "open", "go to", "switch to", "activate" a tab based on its content (e.g. "open the tab that talks about X", "go to the page about X"). The word "open"/"go to"/"switch to" MUST be present.
 - For "open ALL tabs about X" or "open all pages having content X", use open_from_search with "all":true to open every matching page
 - When the user mentions a specific site or domain (e.g. "github tabs", "youtube tabs"), ONLY include tab IDs whose title or URL matches. Example: if [1] Home | github.com, [2] Video | youtube.com, [3] Repo | github.com and user says "pin github tabs", targets should be [1, 3] only.
+- CRITICAL: When the user says "<domain> tabs" (e.g. "github tabs", "youtube tabs"), you MUST filter by domain. Only include tabs whose URL contains that domain. Count the matching tabs first, then build your targets array with ONLY those tab IDs. Never include all tabs when a domain is specified.
 - For search/answer queries where no action applies, use answer
 - For restore_session, use "label" to match by name or "index" for position (0 = most recent)
 - Return ONLY the JSON object, nothing else`;
@@ -88,12 +89,15 @@ export async function queryOllama({ command, tabsFormatted, config, history }) {
   const body = {
     model: config.model,
     stream: false,
+    format: 'json',
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
       { role: 'user', content: userContent },
     ],
     options: {
-      temperature: 0,
+      temperature: 0.3,
+      top_p: 0.9,
+      top_k: 20,
     },
   };
 
@@ -215,6 +219,7 @@ async function retryParse(config, badOutput) {
   const body = {
     model: config.model,
     stream: false,
+    format: 'json',
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
       {
@@ -222,8 +227,13 @@ async function retryParse(config, badOutput) {
         content: `Your previous response was not valid JSON. Here is what you returned:\n\n${badOutput.slice(0, 1000)}\n\nPlease return ONLY the corrected JSON object, nothing else.`,
       },
     ],
-    options: { temperature: 0 },
+    options: { temperature: 0.3, top_p: 0.9, top_k: 20 },
   };
+
+  // Disable thinking for retry call as well
+  if (config.think === false) {
+    body.think = false;
+  }
 
   try {
     const response = await fetch(url, {
