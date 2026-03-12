@@ -39,7 +39,7 @@ const config = loadConfig();
 const PORT = parseInt(process.env.TABAI_PORT || config.bridgePort || "9999", 10);
 const REQUEST_TIMEOUT = 15000; // ms
 const OLLAMA_URL = config.ollamaUrl || "http://localhost:11434";
-const OLLAMA_MODEL = config.model || "qwen3.5:2b";
+const OLLAMA_MODEL = config.model || "qwen3:4b";
 const RAG_MAX_AGE_MS = 2 * 24 * 60 * 60 * 1000; // 2 days
 
 /* ------------------------------------------------------------------ */

@@ -7,7 +7,7 @@ const __dirname = dirname(__filename);
 
 const DEFAULTS = {
   ollamaUrl: 'http://localhost:11434',
-  model: 'qwen3.5:2b',
+  model: 'qwen3:4b',
   think: false,
   bridgePort: 9999,
   confirmDestructive: false,
