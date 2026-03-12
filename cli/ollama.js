@@ -3,11 +3,13 @@ const SYSTEM_PROMPT = `You are tabai, a Chrome tab manager. Given the user's com
 Available actions:
 {"action":"close_tabs","targets":[tabId,...],"reason":"description"}
 {"action":"close_all_except","keep":[tabId,...]}
+{"action":"close_duplicates","keep":"first"}
 {"action":"open_url","url":"https://..."}
 {"action":"open_urls","urls":["https://...",...]}
 {"action":"open_new_tabs","count":N}
 {"action":"bookmark_tabs","targets":[tabId,...],"folder":"FolderName"}
-{"action":"list_bookmarks","query":"optional search term"}
+{"action":"list_bookmarks"}
+{"action":"list_bookmarks","query":"search term"}
 {"action":"group_tabs","targets":[tabId,...],"by":"domain"}
 {"action":"group_tabs","targets":[tabId,...],"by":"custom","name":"GroupName"}
 {"action":"search_tabs","query":"search term"}
@@ -28,16 +30,36 @@ Available actions:
 {"action":"list_history"}
 {"action":"search_history","query":"search term"}
 {"action":"list_sessions"}
+{"action":"index_tabs","targets":"all"}
+{"action":"index_tabs","targets":[tabId,...]}
+{"action":"summarize_tab","target":"current"}
+{"action":"summarize_tab","target":tabId}
+{"action":"search_content","query":"search terms"}
+{"action":"open_from_search","query":"search terms"}
+{"action":"open_from_search","query":"search terms","all":true}
 
 Rules:
-- Use exact tab IDs from the provided tab list
-- Always pick the closest matching action — never refuse with "answer" if an action can handle it
+- Tabs are numbered [1], [2], [3], etc. Use these numbers as tab IDs in your response
+- For informational queries (list/show/what/which/how many tabs), prefer "answer". For action requests (close/open/pin/mute), prefer the matching action.
+- If the user asks to open/activate a specific tab but NO tab in the list matches that site or topic, use answer to say "No matching tab found" and do NOT use open_url to navigate to that site. "open the tab with X" means find an existing tab, not open a new one.
 - For "open tabs" / "new tabs" without specific URLs, use open_new_tabs
-- For "open <site>" without a full URL, infer the URL (e.g. "open youtube" → open_url with "https://www.youtube.com")
+- For "open <site>" without a full URL, infer the URL (e.g. "open youtube" → open_url with "https://www.youtube.com"). But "open the tab with X" or "my X tab" means find an existing tab — use activate_tab or open_from_search, NOT open_url.
 - IMPORTANT: "select", "switch to", "go to", "focus", "activate" a tab means activate_tab — NOT close_tabs
+- For "list bookmarks" or "show bookmarks" without a specific search topic, use list_bookmarks WITHOUT a query field. Only include "query" when the user explicitly mentions a search term.
 - For close commands ONLY (words like "close", "delete", "remove", "kill"), use close_tabs
 - For "close everything except" use close_all_except with the keep list
-- IMPORTANT: "mention", "list", "show", "tell me", "which tabs", "what tabs", "find" are informational queries — use answer (with the matching tab info as text) or search_tabs. NEVER use close_tabs for informational queries.
+- For "list tabs", "show tabs", "list all tabs" — use answer with tab info. There is NO list_tabs action. Do NOT use list_bookmarks for tab listing.
+- For "close duplicate tabs" or "deduplicate", use close_duplicates. Keeps one tab per URL, closes the rest. Set keep to "first" (default) or "last".
+- IMPORTANT: "mention", "list", "show", "tell me", "which tabs", "what tabs", "find", "how many", "count", "number of", "do I have" are informational queries — use answer (with the matching tab info as text) or search_tabs. NEVER use close_tabs, open_url, summarize_tab, or any mutation action for informational queries. "what youtube tabs" means "which tabs are youtube" — use answer, NOT open_url.
+- For counting questions like "how many tabs", answer with the count from the tab list. Do NOT use summarize_tab for counting.
+- For "read all tabs", "index all tabs", "load tabs into context", "get tab content", use index_tabs to extract and index page content into RAG. Use targets "all" or specific tab IDs.
+- For "read this tab" or "index tab X", use index_tabs with the specific tab ID(s)
+- For "summarize this tab/page" or "what is this page about", use summarize_tab with target "current" (or a specific tabId)
+- IMPORTANT: "which article/tab/page about X", "what tabs talk about X", "find pages about X", "do I have a tab about X" are informational queries about page CONTENT — use search_content to list matching results. NEVER use open_from_search for these.
+- IMPORTANT: Only use open_from_search when the user explicitly says "open", "go to", "switch to", "activate" a tab based on its content (e.g. "open the tab that talks about X", "go to the page about X"). The word "open"/"go to"/"switch to" MUST be present.
+- For "open ALL tabs about X" or "open all pages having content X", use open_from_search with "all":true to open every matching page
+- When the user mentions a specific site or domain (e.g. "github tabs", "youtube tabs"), ONLY include tab IDs whose title or URL matches. Example: if [1] Home | github.com, [2] Video | youtube.com, [3] Repo | github.com and user says "pin github tabs", targets should be [1, 3] only.
+- CRITICAL: When the user says "<domain> tabs" (e.g. "github tabs", "youtube tabs"), you MUST filter by domain. Only include tabs whose URL contains that domain. Count the matching tabs first, then build your targets array with ONLY those tab IDs. Never include all tabs when a domain is specified.
 - For search/answer queries where no action applies, use answer
 - For restore_session, use "label" to match by name or "index" for position (0 = most recent)
 - Return ONLY the JSON object, nothing else`;
@@ -67,18 +89,21 @@ export async function queryOllama({ command, tabsFormatted, config, history }) {
   const body = {
     model: config.model,
     stream: false,
+    format: 'json',
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
       { role: 'user', content: userContent },
     ],
     options: {
-      temperature: 0,
+      temperature: 0.3,
+      top_p: 0.9,
+      top_k: 20,
     },
   };
 
-  // Some Ollama versions support options.think — include it to suppress thinking
+  // Disable thinking for qwen3.5 and similar models — set at top level (Ollama API)
   if (config.think === false) {
-    body.options.think = false;
+    body.think = false;
   }
 
   let response;
@@ -194,6 +219,7 @@ async function retryParse(config, badOutput) {
   const body = {
     model: config.model,
     stream: false,
+    format: 'json',
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
       {
@@ -201,8 +227,13 @@ async function retryParse(config, badOutput) {
         content: `Your previous response was not valid JSON. Here is what you returned:\n\n${badOutput.slice(0, 1000)}\n\nPlease return ONLY the corrected JSON object, nothing else.`,
       },
     ],
-    options: { temperature: 0 },
+    options: { temperature: 0.3, top_p: 0.9, top_k: 20 },
   };
+
+  // Disable thinking for retry call as well
+  if (config.think === false) {
+    body.think = false;
+  }
 
   try {
     const response = await fetch(url, {

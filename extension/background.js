@@ -117,6 +117,44 @@ function matchesQuery(tab, query) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Content extraction (for RAG indexing)                             */
+/* ------------------------------------------------------------------ */
+
+async function extractContent(tabId) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        const clone = document.body.cloneNode(true);
+        for (const el of clone.querySelectorAll(
+          'script,style,nav,header,footer,aside,iframe,noscript,' +
+          '.sidebar,.nav,.menu,[role="navigation"],[role="banner"],' +
+          '[role="complementary"]'
+        )) {
+          el.remove();
+        }
+        let text = clone.innerText || clone.textContent || '';
+        text = text.replace(/\s+/g, ' ').trim();
+        return { text: text.slice(0, 10000), title: document.title, url: location.href };
+      }
+    });
+    return results?.[0]?.result || null;
+  } catch (e) {
+    // Silently fail for restricted pages (chrome://, PDFs, etc.)
+    return null;
+  }
+}
+
+function shouldIndex(url) {
+  if (!url) return false;
+  return !url.startsWith('chrome://') &&
+         !url.startsWith('chrome-extension://') &&
+         !url.startsWith('about:') &&
+         !url.startsWith('chrome-search://') &&
+         !url.startsWith('devtools://');
+}
+
+/* ------------------------------------------------------------------ */
 /*  Bootstrap: build initial tab index                                */
 /* ------------------------------------------------------------------ */
 
@@ -165,6 +203,21 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     tabIndex[tabId] = compact(tab);
   }
   await flushIndex();
+
+  // Background RAG indexing: extract content when page finishes loading
+  if (changeInfo.status === 'complete' && shouldIndex(tab.url)) {
+    extractContent(tabId).then(content => {
+      if (content && nativePort) {
+        try {
+          nativePort.postMessage({
+            id: 'index-' + Date.now(),
+            action: 'index_page',
+            params: content
+          });
+        } catch (_) {}
+      }
+    });
+  }
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
@@ -307,17 +360,22 @@ chrome.runtime.onInstalled.addListener(() => {
 async function resolveTargets(targets) {
   if (!targets) return [];
 
-  // Single numeric id
+  // Single numeric id (or numeric string from LLM)
   if (typeof targets === "number") {
     const t = tabIndex[targets];
     return t ? [t] : [];
   }
 
-  // Array of numeric ids
+  if (typeof targets === "string" && /^\d+$/.test(targets)) {
+    const t = tabIndex[parseInt(targets, 10)];
+    return t ? [t] : [];
+  }
+
+  // Array of numeric ids (or numeric strings)
   if (Array.isArray(targets)) {
     if (targets.length === 0) return [];
-    if (typeof targets[0] === "number") {
-      return targets.map(id => tabIndex[id]).filter(Boolean);
+    if (typeof targets[0] === "number" || (typeof targets[0] === "string" && /^\d+$/.test(targets[0]))) {
+      return targets.map(id => tabIndex[typeof id === "string" ? parseInt(id, 10) : id]).filter(Boolean);
     }
     // Array of query strings — union of matches
     const results = [];
@@ -397,6 +455,28 @@ async function handleAction(msg) {
       const keepIds = new Set(keep.map(t => t.id));
       const allTabs = Object.values(tabIndex);
       const toClose = allTabs.filter(t => !keepIds.has(t.id)).map(t => t.id);
+      if (toClose.length === 0) return { id, result: { closed: 0, tabIds: [] } };
+      await chrome.tabs.remove(toClose);
+      return { id, result: { closed: toClose.length, tabIds: toClose } };
+    }
+
+    case "close_duplicates": {
+      await saveSession("before-close-duplicates");
+      const allTabs = Object.values(tabIndex);
+      const byUrl = {};
+      for (const tab of allTabs) {
+        const url = tab.url || "";
+        if (!url || url === "chrome://newtab/") continue;
+        if (!byUrl[url]) byUrl[url] = [];
+        byUrl[url].push(tab);
+      }
+      const toClose = [];
+      for (const [, group] of Object.entries(byUrl)) {
+        if (group.length < 2) continue;
+        group.sort((a, b) => a.id - b.id);
+        const dupes = p.keep === "last" ? group.slice(0, -1) : group.slice(1);
+        for (const tab of dupes) toClose.push(tab.id);
+      }
       if (toClose.length === 0) return { id, result: { closed: 0, tabIds: [] } };
       await chrome.tabs.remove(toClose);
       return { id, result: { closed: toClose.length, tabIds: toClose } };
@@ -800,6 +880,40 @@ async function handleAction(msg) {
       } catch (e) {
         return { id, error: e.message };
       }
+    }
+
+    /* ---------- Content extraction ---------- */
+
+    case "extract_content": {
+      const targets = await resolveTargets(p.target || p.targets || "current");
+      if (targets.length === 0) return { id, error: "No matching tab" };
+      const content = await extractContent(targets[0].id);
+      if (!content) return { id, error: "Could not extract content from this page" };
+      return { id, result: content };
+    }
+
+    case "extract_tabs_content": {
+      const targets = await resolveTargets(p.targets || "all");
+      if (targets.length === 0) return { id, error: "No matching tabs" };
+      const indexed = [];
+      const failed = [];
+      for (const tab of targets) {
+        if (!shouldIndex(tab.url)) {
+          failed.push({ id: tab.id, title: tab.title, reason: "restricted URL" });
+          continue;
+        }
+        try {
+          const content = await extractContent(tab.id);
+          if (content && content.text) {
+            indexed.push({ url: content.url, title: content.title, text: content.text });
+          } else {
+            failed.push({ id: tab.id, title: tab.title, reason: "could not extract content" });
+          }
+        } catch (e) {
+          failed.push({ id: tab.id, title: tab.title, reason: e.message || "extraction error" });
+        }
+      }
+      return { id, result: { indexed, failed } };
     }
 
     /* ---------- Utility ---------- */

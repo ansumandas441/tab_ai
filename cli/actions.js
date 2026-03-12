@@ -14,6 +14,7 @@ export async function executeAction(action, config) {
     // so we extract the action name and pass the rest as params.
     case 'close_tabs':
     case 'close_all_except':
+    case 'close_duplicates':
     case 'open_url':
     case 'open_urls':
     case 'open_new_tabs':
@@ -58,6 +59,45 @@ export async function executeAction(action, config) {
     case 'list_sessions':
       return getJson(`${base}/sessions`);
 
+    // ── RAG actions ───────────────────────────────────────────────────────
+    case 'index_tabs':
+      return postJson(`${base}/rag/index`, {
+        targets: action.targets || 'all'
+      });
+
+    case 'summarize_tab':
+      return postJson(`${base}/rag/summarize`, {
+        target: action.target || 'current'
+      });
+
+    case 'search_content':
+      return getJson(`${base}/rag/search?q=${encodeURIComponent(action.query || '')}&limit=${action.limit || 5}`);
+
+    case 'open_from_search': {
+      const limit = action.all ? 20 : 1;
+      const searchResult = await getJson(`${base}/rag/search?q=${encodeURIComponent(action.query || '')}&limit=${limit}`);
+      const results = searchResult?.results || [];
+      if (results.length === 0) {
+        return { text: `No indexed pages found matching "${action.query}"` };
+      }
+      // Look up current tabs to find matching tab ID by URL
+      const tabsData = await getJson(`${base}/tabs`);
+      const tabs = tabsData?.tabs || [];
+      const topUrl = results[0].url;
+      const matchingTab = tabs.find(t => t.url === topUrl);
+      if (matchingTab) {
+        // Activate existing tab by ID
+        const activateResult = await postJson(`${base}/action`, { action: 'activate_tab', params: { target: matchingTab.id } });
+        if (!action.all || results.length === 1) return activateResult;
+        return {
+          activated: topUrl,
+          allMatches: results.map(r => ({ url: r.url, title: r.title, score: r.score }))
+        };
+      }
+      // Tab no longer open — open it as a new tab
+      return postJson(`${base}/action`, { action: 'open_url', params: { url: topUrl } });
+    }
+
     // ── Purely local actions (no bridge call) ─────────────────────────────
     case 'search_tabs':
       // The model already resolved matching tabs in its answer; nothing to call.
@@ -77,6 +117,7 @@ export async function executeAction(action, config) {
 export function isDestructive(action) {
   return action.action === 'close_tabs' ||
          action.action === 'close_all_except' ||
+         action.action === 'close_duplicates' ||
          action.action === 'restore_session';
 }
 
@@ -94,6 +135,11 @@ export function formatResult(action, result) {
     case 'close_all_except': {
       const kept = action.keep?.length ?? 0;
       return `Closed all tabs except ${kept} kept`;
+    }
+
+    case 'close_duplicates': {
+      const count = result?.closed ?? 0;
+      return `Closed ${count} duplicate tab${count !== 1 ? 's' : ''}`;
     }
 
     case 'open_url':
@@ -184,6 +230,37 @@ export function formatResult(action, result) {
     case 'list_sessions':
       return formatSessionsResult(result);
 
+    case 'index_tabs': {
+      const indexed = result?.indexed ?? 0;
+      const failed = result?.failed ?? 0;
+      let msg = `Indexed ${indexed} tab${indexed !== 1 ? 's' : ''} into RAG`;
+      if (failed > 0) msg += ` (${failed} skipped — chrome:// and restricted pages cannot be indexed)`;
+      return msg;
+    }
+
+    case 'summarize_tab':
+      return result?.summary || result?.text || 'Summary not available';
+
+    case 'search_content': {
+      const items = result?.results || [];
+      if (items.length === 0) return `No indexed pages found matching "${action.query}"`;
+      const lines = items.map((r, i) =>
+        `  ${i + 1}. ${r.title || 'Untitled'} (${extractDomain(r.url)}) [score: ${r.score.toFixed(2)}]\n     ${r.snippet || ''}`
+      );
+      return [`Content search for "${action.query}" (${items.length} results):`, ...lines].join('\n');
+    }
+
+    case 'open_from_search': {
+      if (result?.text) return result.text; // "No indexed pages found..."
+      if (result?.allMatches) {
+        const lines = result.allMatches.map((r, i) =>
+          `  ${i + 1}. ${r.title || 'Untitled'} [score: ${r.score.toFixed(2)}]`
+        );
+        return [`Activated best match. All matching pages for "${action.query}":`, ...lines].join('\n');
+      }
+      return `Activated page matching "${action.query}"`;
+    }
+
     case 'answer':
       return action.text ?? result?.text ?? '';
 
@@ -236,6 +313,15 @@ async function getJson(url) {
 }
 
 // ── Result formatting helpers ────────────────────────────────────────────────
+
+function extractDomain(url) {
+  if (!url) return '?';
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return url.slice(0, 40);
+  }
+}
 
 function formatBookmarksResult(result, filter) {
   const items = Array.isArray(result) ? result : (result?.bookmarks ?? []);
