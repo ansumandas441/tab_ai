@@ -460,6 +460,28 @@ async function handleAction(msg) {
       return { id, result: { closed: toClose.length, tabIds: toClose } };
     }
 
+    case "close_duplicates": {
+      await saveSession("before-close-duplicates");
+      const allTabs = Object.values(tabIndex);
+      const byUrl = {};
+      for (const tab of allTabs) {
+        const url = tab.url || "";
+        if (!url || url === "chrome://newtab/") continue;
+        if (!byUrl[url]) byUrl[url] = [];
+        byUrl[url].push(tab);
+      }
+      const toClose = [];
+      for (const [, group] of Object.entries(byUrl)) {
+        if (group.length < 2) continue;
+        group.sort((a, b) => a.id - b.id);
+        const dupes = p.keep === "last" ? group.slice(0, -1) : group.slice(1);
+        for (const tab of dupes) toClose.push(tab.id);
+      }
+      if (toClose.length === 0) return { id, result: { closed: 0, tabIds: [] } };
+      await chrome.tabs.remove(toClose);
+      return { id, result: { closed: toClose.length, tabIds: toClose } };
+    }
+
     case "open_url": {
       const url = p.url;
       if (!url) return { id, error: "Missing url parameter" };

@@ -14,6 +14,7 @@ export async function executeAction(action, config) {
     // so we extract the action name and pass the rest as params.
     case 'close_tabs':
     case 'close_all_except':
+    case 'close_duplicates':
     case 'open_url':
     case 'open_urls':
     case 'open_new_tabs':
@@ -116,6 +117,7 @@ export async function executeAction(action, config) {
 export function isDestructive(action) {
   return action.action === 'close_tabs' ||
          action.action === 'close_all_except' ||
+         action.action === 'close_duplicates' ||
          action.action === 'restore_session';
 }
 
@@ -133,6 +135,11 @@ export function formatResult(action, result) {
     case 'close_all_except': {
       const kept = action.keep?.length ?? 0;
       return `Closed all tabs except ${kept} kept`;
+    }
+
+    case 'close_duplicates': {
+      const count = result?.closed ?? 0;
+      return `Closed ${count} duplicate tab${count !== 1 ? 's' : ''}`;
     }
 
     case 'open_url':
@@ -227,7 +234,7 @@ export function formatResult(action, result) {
       const indexed = result?.indexed ?? 0;
       const failed = result?.failed ?? 0;
       let msg = `Indexed ${indexed} tab${indexed !== 1 ? 's' : ''} into RAG`;
-      if (failed > 0) msg += ` (${failed} failed)`;
+      if (failed > 0) msg += ` (${failed} skipped — chrome:// and restricted pages cannot be indexed)`;
       return msg;
     }
 

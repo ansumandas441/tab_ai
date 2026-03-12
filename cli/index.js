@@ -148,6 +148,10 @@ function previewAction(action, tabs) {
       break;
     }
 
+    case 'close_duplicates':
+      console.log(chalk.red.bold(`\nWill close duplicate tabs (keeping ${action.keep ?? 'first'} of each URL)`));
+      break;
+
     case 'open_url':
       console.log(chalk.cyan(`\nWill open: ${action.url}`));
       break;
@@ -395,6 +399,72 @@ async function main() {
   if (config.debug) {
     console.log(chalk.magenta.bold('\n─── DEBUG: Parsed action from LLM (after ID remap) ───'));
     console.log(chalk.magenta(JSON.stringify(action, null, 2)));
+  }
+
+  // ── Client-side validation (defense in depth for small LLMs) ────────────
+  {
+    const cmd = parsed.command.toLowerCase();
+    const domainWords = ['github','youtube','google','stackoverflow','reddit','twitter','facebook','linkedin','slack','notion','figma','vercel','netlify'];
+
+    // Informational question override — questions about tabs should answer, not act
+    if (/^(what|which|show me|list|tell|are there)\b/i.test(cmd) && /\btabs?\b/i.test(cmd) && action.action !== 'answer' && action.action !== 'search_tabs' && action.action !== 'search_content') {
+      const domainFilter = domainWords.find(d => cmd.toLowerCase().includes(d));
+      let matching = tabs;
+      if (domainFilter) matching = tabs.filter(t => ((t.title||'')+ ' ' + (t.url||'')).toLowerCase().includes(domainFilter));
+      const label = domainFilter ? `${domainFilter} ` : '';
+      if (matching.length === 0) {
+        action = { action: 'answer', text: `No ${label}tabs found.` };
+      } else {
+        const list = matching.slice(0, 30).map(t => `  ${t.title || 'Untitled'} | ${t.url ? new URL(t.url).hostname : 'unknown'}`).join('\n');
+        action = { action: 'answer', text: `${matching.length} ${label}tab${matching.length !== 1 ? 's' : ''} open:\n${list}` };
+      }
+      if (config.debug) console.log(chalk.hex('#b388ff')(`[validate] Overrode ${action.action} → answer for informational query`));
+    }
+
+    // Counting question override
+    if (/how many|count\s.*tab|number of\s.*tab/i.test(cmd) && action.action !== 'answer') {
+      action = { action: 'answer', text: `You have ${tabs.length} tabs open.` };
+    }
+
+    // activate_tab relevance check
+    if (action.action === 'activate_tab') {
+      const stopWords = new Set(['open','switch','go','to','focus','activate','the','tab','with','about','a','my','me','on','in','for']);
+      const keywords = cmd.split(/\s+/).filter(w => w.length > 1 && !stopWords.has(w));
+      const targetId = action.target ?? action.targets;
+      const tab = tabs.find(t => t.id === targetId);
+      if (tab && keywords.length > 0) {
+        const haystack = ((tab.title || '') + ' ' + (tab.url || '')).toLowerCase();
+        const matches = keywords.some(kw => haystack.includes(kw));
+        if (!matches) {
+          action = { action: 'answer', text: 'No matching tab found for your query.' };
+        }
+      }
+    }
+
+    // open_url override — "open the tab with X" means existing tab, not new URL
+    if (action.action === 'open_url' && /\b(the\s+tab|tab\s+with|tab\s+about|my\s+\w+\s+tab)\b/i.test(cmd)) {
+      const stopWords = new Set(['open','the','tab','with','about','a','my','go','to','switch','please','that','is','on']);
+      const keywords = cmd.toLowerCase().split(/\s+/).filter(w => w.length > 2 && !stopWords.has(w));
+      const found = tabs.find(t => {
+        const hay = ((t.title||'')+ ' ' + (t.url||'')).toLowerCase();
+        return keywords.some(kw => hay.includes(kw));
+      });
+      if (found) {
+        action = { action: 'activate_tab', target: found.id };
+      } else {
+        action = { action: 'answer', text: `No open tab matches "${keywords.join(' ')}". Say "open <site>" (without "tab") to open a new page.` };
+      }
+    }
+
+    // Domain filtering correction — if domain mentioned but LLM selected too many tabs, filter
+    const mentionedDomain = domainWords.find(d => cmd.toLowerCase().includes(d));
+    if (mentionedDomain && Array.isArray(action.targets) && tabs.length > 1) {
+      const matchingTabs = tabs.filter(t => ((t.title||'')+ ' ' + (t.url||'')).toLowerCase().includes(mentionedDomain));
+      if (matchingTabs.length > 0 && action.targets.length > matchingTabs.length) {
+        console.log(chalk.yellow(`\n⚠ Corrected: LLM selected ${action.targets.length} tabs but only ${matchingTabs.length} match "${mentionedDomain}". Filtering.`));
+        action.targets = matchingTabs.map(t => t.id);
+      }
+    }
   }
 
   previewAction(action, tabs);
