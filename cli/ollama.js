@@ -48,8 +48,8 @@ Rules:
 - For "read all tabs", "index all tabs", "load tabs into context", "get tab content", use index_tabs to extract and index page content into RAG. Use targets "all" or specific tab IDs.
 - For "read this tab" or "index tab X", use index_tabs with the specific tab ID(s)
 - For "summarize this tab/page" or "what is this page about", use summarize_tab with target "current" (or a specific tabId)
-- IMPORTANT: When the user says "open the tab/page that talks about X", "open tab about X", "open tab having content X", "open page related to X", "switch to the tab about X", "go to the page about X" — ALWAYS use open_from_search. This activates the matching tab in Chrome.
-- IMPORTANT: Only use search_content when the user explicitly wants to SEARCH or LIST results (e.g. "search my pages about X", "find articles about X", "which page was about X"). If the user says "open" or "go to" or "switch to", use open_from_search instead.
+- IMPORTANT: "which article/tab/page about X", "what tabs talk about X", "find pages about X", "do I have a tab about X" are informational queries about page CONTENT — use search_content to list matching results. NEVER use open_from_search for these.
+- IMPORTANT: Only use open_from_search when the user explicitly says "open", "go to", "switch to", "activate" a tab based on its content (e.g. "open the tab that talks about X", "go to the page about X"). The word "open"/"go to"/"switch to" MUST be present.
 - For "open ALL tabs about X" or "open all pages having content X", use open_from_search with "all":true to open every matching page
 - For search/answer queries where no action applies, use answer
 - For restore_session, use "label" to match by name or "index" for position (0 = most recent)
