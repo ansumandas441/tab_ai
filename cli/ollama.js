@@ -50,8 +50,7 @@ Rules:
 - For "close everything except" use close_all_except with the keep list
 - For "list tabs", "show tabs", "list all tabs" — use answer with tab info. There is NO list_tabs action. Do NOT use list_bookmarks for tab listing.
 - For "close duplicate tabs" or "deduplicate", use close_duplicates. Keeps one tab per URL, closes the rest. Set keep to "first" (default) or "last".
-- IMPORTANT: "mention", "list", "show", "tell me", "which tabs", "what tabs", "find", "how many", "count", "number of", "do I have" are informational queries — use answer (with the matching tab info as text) or search_tabs. NEVER use close_tabs, open_url, summarize_tab, or any mutation action for informational queries. "what youtube tabs" means "which tabs are youtube" — use answer, NOT open_url.
-- For counting questions like "how many tabs", answer with the count from the tab list. Do NOT use summarize_tab for counting.
+- IMPORTANT: "mention", "list", "show", "tell me", "which tabs", "what tabs", "find", "how many", "count", "number of", "do I have" are ALL informational queries — use answer (with the matching tab info or count as text) or search_tabs. NEVER use close_tabs, open_url, summarize_tab, or any mutation action for informational queries. "what youtube tabs" means "which tabs are youtube" — use answer, NOT open_url.
 - For "read all tabs", "index all tabs", "load tabs into context", "get tab content", use index_tabs to extract and index page content into RAG. Use targets "all" or specific tab IDs.
 - For "read this tab" or "index tab X", use index_tabs with the specific tab ID(s)
 - For "summarize this tab/page" or "what is this page about", use summarize_tab with target "current" (or a specific tabId)
@@ -59,10 +58,58 @@ Rules:
 - IMPORTANT: Only use open_from_search when the user explicitly says "open", "go to", "switch to", "activate" a tab based on its content (e.g. "open the tab that talks about X", "go to the page about X"). The word "open"/"go to"/"switch to" MUST be present.
 - For "open ALL tabs about X" or "open all pages having content X", use open_from_search with "all":true to open every matching page
 - When the user mentions a specific site or domain (e.g. "github tabs", "youtube tabs"), ONLY include tab IDs whose title or URL matches. Example: if [1] Home | github.com, [2] Video | youtube.com, [3] Repo | github.com and user says "pin github tabs", targets should be [1, 3] only.
-- CRITICAL: When the user says "<domain> tabs" (e.g. "github tabs", "youtube tabs"), you MUST filter by domain. Only include tabs whose URL contains that domain. Count the matching tabs first, then build your targets array with ONLY those tab IDs. Never include all tabs when a domain is specified.
+- CRITICAL: When the user says "<domain> tabs" (e.g. "github tabs", "youtube tabs"), you MUST filter by domain. Include tabs whose URL contains that domain OR its subdomains (e.g. "github" matches github.com, github.io, *.github.io). Count ALL matching tabs first, then build your targets array with ONLY those tab IDs. Never include all tabs when a domain is specified.
 - For search/answer queries where no action applies, use answer
+- For "answer" actions: keep "text" SHORT (one sentence). The CLI reformats tab listings, so do NOT enumerate all tabs. Just state the key fact (e.g. "You have 25 tabs open" or "4 GitHub tabs found").
 - For restore_session, use "label" to match by name or "index" for position (0 = most recent)
-- Return ONLY the JSON object, nothing else`;
+Examples:
+User: "close all youtube tabs" (tabs: [1] Home | youtube.com, [2] Repo | github.com, [3] Video | youtube.com)
+→ {"action":"close_tabs","targets":[1,3],"reason":"closing youtube tabs"}
+
+User: "how many github tabs do I have?" (tabs: [1] PR | github.com, [2] Video | youtube.com, [3] Blog | karpathy.github.io, [4] Issues | github.com)
+→ {"action":"answer","text":"You have 3 GitHub tabs: [1] PR, [3] Blog, and [4] Issues."}
+
+User: "pin all github tabs" (tabs: [1] Home | youtube.com, [2] Repo | github.com, [3] PR | github.com)
+→ {"action":"pin_tabs","targets":[2,3]}
+
+Return ONLY the JSON object, nothing else`;
+
+const ACTION_SCHEMA = {
+  type: 'object',
+  properties: {
+    action: {
+      type: 'string',
+      enum: [
+        'close_tabs', 'close_all_except', 'close_duplicates',
+        'open_url', 'open_urls', 'open_new_tabs',
+        'bookmark_tabs', 'list_bookmarks', 'group_tabs',
+        'search_tabs', 'mute_tabs', 'unmute_tabs',
+        'pin_tabs', 'unpin_tabs', 'duplicate_tab',
+        'move_tab', 'activate_tab', 'reload_tabs', 'discard_tabs',
+        'answer', 'restore_last_closed', 'restore_session',
+        'save_session', 'list_history', 'search_history',
+        'list_sessions', 'index_tabs', 'summarize_tab',
+        'search_content', 'open_from_search',
+      ],
+    },
+    targets: { type: 'array', items: { type: 'integer' } },
+    target: { type: 'integer' },
+    url: { type: 'string' },
+    urls: { type: 'array', items: { type: 'string' } },
+    query: { type: 'string' },
+    text: { type: 'string' },
+    reason: { type: 'string' },
+    keep: {},
+    count: { type: 'integer' },
+    by: { type: 'string' },
+    name: { type: 'string' },
+    folder: { type: 'string' },
+    label: { type: 'string' },
+    index: { type: 'integer' },
+    all: { type: 'boolean' },
+  },
+  required: ['action'],
+};
 
 /**
  * Send a command + tab context to Ollama and get back a parsed action object.
@@ -89,15 +136,16 @@ export async function queryOllama({ command, tabsFormatted, config, history }) {
   const body = {
     model: config.model,
     stream: false,
-    format: 'json',
+    format: ACTION_SCHEMA,
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
       { role: 'user', content: userContent },
     ],
     options: {
-      temperature: 0.3,
-      top_p: 0.9,
+      temperature: 0.7,
+      top_p: 0.8,
       top_k: 20,
+      presence_penalty: 1.5,
     },
   };
 
@@ -219,7 +267,7 @@ async function retryParse(config, badOutput) {
   const body = {
     model: config.model,
     stream: false,
-    format: 'json',
+    format: ACTION_SCHEMA,
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
       {
@@ -227,7 +275,7 @@ async function retryParse(config, badOutput) {
         content: `Your previous response was not valid JSON. Here is what you returned:\n\n${badOutput.slice(0, 1000)}\n\nPlease return ONLY the corrected JSON object, nothing else.`,
       },
     ],
-    options: { temperature: 0.3, top_p: 0.9, top_k: 20 },
+    options: { temperature: 0.7, top_p: 0.8, top_k: 20, presence_penalty: 1.5 },
   };
 
   // Disable thinking for retry call as well

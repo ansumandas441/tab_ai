@@ -62,6 +62,12 @@ export function remapActionIds(action, idMap) {
 
   const copy = { ...action };
 
+  // Normalize targets: if model returned an object instead of array, extract values
+  if (copy.targets && typeof copy.targets === 'object' && !Array.isArray(copy.targets)) {
+    const vals = Object.values(copy.targets).filter(v => typeof v === 'number');
+    if (vals.length > 0) copy.targets = vals;
+  }
+
   if (Array.isArray(copy.targets)) {
     copy.targets = copy.targets.map(remap);
   } else if (typeof copy.targets === 'number' || (typeof copy.targets === 'string' && /^\d+$/.test(copy.targets))) {

@@ -267,6 +267,9 @@ function extractDomain(url) {
   }
 }
 
+// ── Domain keywords for client-side validation ───────────────────────────────
+const DOMAIN_WORDS = ['github','youtube','google','stackoverflow','reddit','twitter','facebook','linkedin','slack','notion','figma','vercel','netlify'];
+
 // ── Informational actions (no bridge call, just display) ─────────────────────
 
 // Actions that only read data or provide a text answer — no confirmation needed
@@ -415,7 +418,7 @@ async function main() {
   // ── Client-side validation (defense in depth for small LLMs) ────────────
   {
     const cmd = parsed.command.toLowerCase();
-    const domainWords = ['github','youtube','google','stackoverflow','reddit','twitter','facebook','linkedin','slack','notion','figma','vercel','netlify'];
+    const domainWords = DOMAIN_WORDS;
 
     // Informational question override — questions about tabs should answer, not act
     const isDomainQuery = domainWords.some(d => cmd.toLowerCase().includes(d));
@@ -434,9 +437,12 @@ async function main() {
       if (config.debug) console.log(chalk.hex('#b388ff')(`[validate] Overrode ${action.action} → answer for informational query`));
     }
 
-    // Counting question override
+    // Counting question override (domain-aware)
     if (/how many|count\s.*tab|number of\s.*tab/i.test(cmd) && action.action !== 'answer') {
-      action = { action: 'answer', text: `You have ${tabs.length} tabs open.` };
+      const countDomain = domainWords.find(d => cmd.toLowerCase().includes(d));
+      const countTabs = countDomain ? tabs.filter(t => ((t.title||'')+ ' ' + (t.url||'')).toLowerCase().includes(countDomain)) : tabs;
+      const label = countDomain ? `${countDomain} ` : '';
+      action = { action: 'answer', text: `You have ${countTabs.length} ${label}tab${countTabs.length !== 1 ? 's' : ''} open.` };
     }
 
     // Navigation intent override — "go to", "switch to", "navigate to" + positional word should activate, not answer
