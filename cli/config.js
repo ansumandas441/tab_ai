@@ -12,6 +12,7 @@ const DEFAULTS = {
   bridgePort: 9999,
   confirmDestructive: false,
   debug: false,
+  pipeline: true,
 };
 
 /**

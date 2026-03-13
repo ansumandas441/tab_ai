@@ -4,5 +4,6 @@
   "think": false,
   "bridgePort": 9999,
   "confirmDestructive": false,
-  "debug": false
+  "debug": false,
+  "pipeline": true
 }

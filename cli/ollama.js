@@ -299,6 +299,203 @@ async function retryParse(config, badOutput) {
   }
 }
 
+// ── Stage 1: Intent Classification (small, focused prompt) ───────────────────
+
+const CLASSIFY_SCHEMA = {
+  type: 'object',
+  properties: {
+    intent: {
+      type: 'string',
+      enum: ['informational', 'navigate', 'mutate', 'organize', 'content', 'session'],
+    },
+    topic: { type: 'string' },
+    specifics: { type: 'string' },
+  },
+  required: ['intent'],
+};
+
+const CLASSIFY_PROMPT = `Classify this browser tab command. Return JSON with:
+- "intent": one of "informational", "navigate", "mutate", "organize", "content", "session"
+- "topic": subject keywords (e.g. "youtube", "react docs")
+- "specifics": action detail (e.g. "close", "pin", "group by domain")
+
+Intent meanings:
+- informational: questions about tabs (how many, which, list, show, count)
+- navigate: switch to, go to, focus, activate a tab
+- mutate: close, open, reload, discard tabs
+- organize: pin, unpin, group, bookmark, mute, unmute tabs
+- content: summarize, index, search page content
+- session: restore, save, list sessions or history`;
+
+/**
+ * Stage 1 LLM call: classify the user's intent into one of 6 categories.
+ * Much simpler than the full 30-action classification.
+ *
+ * @param {object} params
+ * @param {string} params.command - Natural language command
+ * @param {object} params.config - Merged config
+ * @returns {Promise<{ intent: string, topic: string, specifics: string }>}
+ */
+export async function classifyIntent({ command, config }) {
+  const url = `${config.ollamaUrl}/api/chat`;
+
+  const body = {
+    model: config.model,
+    stream: false,
+    format: CLASSIFY_SCHEMA,
+    messages: [
+      { role: 'system', content: CLASSIFY_PROMPT },
+      { role: 'user', content: `Command: "${command}"` },
+    ],
+    options: { temperature: 0.3, top_p: 0.8, top_k: 10 },
+  };
+
+  if (config.think === false) body.think = false;
+
+  let response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    throw new OllamaError(`Cannot reach Ollama: ${err.message}`);
+  }
+
+  if (!response.ok) {
+    throw new OllamaError(`Ollama returned HTTP ${response.status}`);
+  }
+
+  const data = await response.json();
+  const raw = data.message?.content ?? data.response ?? '';
+
+  let parsed = tryParseJson(raw);
+  if (!parsed) parsed = tryParseJson(stripCodeFences(raw));
+  if (!parsed) throw new OllamaError('Classification returned invalid JSON');
+
+  // Map LLM intent categories back to pipeline intents
+  const intentMap = {
+    informational: 'list_tabs',
+    navigate: 'navigate',
+    mutate: 'mutate_close',
+    organize: 'organize',
+    content: 'content',
+    session: 'session',
+  };
+
+  return {
+    intent: intentMap[parsed.intent] || parsed.intent || 'list_tabs',
+    topic: (parsed.topic || '').toLowerCase(),
+    specifics: parsed.specifics || '',
+  };
+}
+
+// ── Stage 3: Focused Action Emission ─────────────────────────────────────────
+
+const ACTION_CATEGORIES = {
+  list_tabs:     ['answer', 'search_tabs', 'search_content'],
+  navigate:      ['activate_tab', 'open_from_search', 'open_url', 'answer'],
+  mutate_close:  ['close_tabs', 'close_all_except', 'close_duplicates',
+                  'open_url', 'open_urls', 'open_new_tabs',
+                  'reload_tabs', 'discard_tabs', 'answer'],
+  organize:      ['pin_tabs', 'unpin_tabs', 'group_tabs', 'bookmark_tabs',
+                  'duplicate_tab', 'move_tab', 'mute_tabs', 'unmute_tabs', 'answer'],
+  content:       ['summarize_tab', 'search_content', 'open_from_search', 'index_tabs', 'answer'],
+  session:       ['save_session', 'restore_session', 'restore_last_closed',
+                  'list_sessions', 'list_history', 'search_history', 'list_bookmarks', 'answer'],
+};
+
+/**
+ * Stage 3 LLM call: emit the final action JSON using only the subset of actions
+ * relevant to the classified intent. Turns a 30-way decision into ~5-way.
+ *
+ * @param {object} params
+ * @param {object} params.classification - { intent, topic, specifics }
+ * @param {Array}  params.tabs - tab objects
+ * @param {string} params.tabsFormatted - formatted tab string for LLM
+ * @param {string} params.command - original command
+ * @param {object} params.config - merged config
+ * @param {string} [params.historyContext] - optional history context
+ * @returns {Promise<object>} Action object
+ */
+export async function emitAction({ classification, tabs, tabsFormatted, command, config, historyContext }) {
+  const url = `${config.ollamaUrl}/api/chat`;
+  const actions = ACTION_CATEGORIES[classification.intent] || ACTION_CATEGORIES.list_tabs;
+
+  // Build focused schema with only relevant actions
+  const focusedSchema = {
+    ...ACTION_SCHEMA,
+    properties: {
+      ...ACTION_SCHEMA.properties,
+      action: { type: 'string', enum: actions },
+    },
+  };
+
+  const focusedPrompt = `You are tabai, a Chrome tab manager. Given the user's command and tabs, return a single JSON action.
+Available actions for this command: ${actions.join(', ')}
+Rules:
+- Tabs are numbered [1], [2], etc. Use these numbers as tab IDs.
+- When a domain is mentioned (e.g. "github tabs"), ONLY include tabs matching that domain.
+- For close commands, use close_tabs with targets array.
+- For "close everything except X", use close_all_except with keep array.
+- For informational queries, use answer with a short text.
+Return ONLY valid JSON.`;
+
+  let userContent = `Command: ${command}\n\n${tabsFormatted}`;
+  if (historyContext) userContent += `\n\n${historyContext}`;
+  if (classification.topic) userContent += `\n\nDetected topic: ${classification.topic}`;
+  if (classification.specifics) userContent += `\nDetected specifics: ${classification.specifics}`;
+
+  const body = {
+    model: config.model,
+    stream: false,
+    format: focusedSchema,
+    messages: [
+      { role: 'system', content: focusedPrompt },
+      { role: 'user', content: userContent },
+    ],
+    options: { temperature: 0.5, top_p: 0.8, top_k: 15, presence_penalty: 1.5 },
+  };
+
+  if (config.think === false) body.think = false;
+
+  let response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    throw new OllamaError(`Cannot reach Ollama: ${err.message}`);
+  }
+
+  if (!response.ok) {
+    throw new OllamaError(`Ollama returned HTTP ${response.status}`);
+  }
+
+  const data = await response.json();
+  const raw = data.message?.content ?? data.response ?? '';
+
+  if (config.debug) {
+    console.log('\x1b[35m  [emitAction] Raw LLM response: ' + raw.slice(0, 300) + '\x1b[0m');
+    if (data.eval_count) {
+      console.log(`\x1b[35m  Tokens: ${data.eval_count} eval, ${data.prompt_eval_count ?? '?'} prompt\x1b[0m`);
+    }
+  }
+
+  let parsed = tryParseJson(raw);
+  if (!parsed) parsed = tryParseJson(stripCodeFences(raw));
+  if (!parsed) {
+    const retryParsed = await retryParse(config, raw);
+    if (retryParsed) return retryParsed;
+    throw new OllamaError('Emission returned invalid JSON');
+  }
+
+  return parsed;
+}
+
 /**
  * Custom error class so callers can distinguish Ollama failures.
  */
