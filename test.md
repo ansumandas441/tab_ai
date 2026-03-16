@@ -179,3 +179,32 @@ const MOCK_CONFIG = {
 - **Command:** `"close all spotify tabs"`
 - **Expected:** `action === 'answer'` and `text` contains `"No spotify tabs found"`
 - **LLM calls:** 0
+
+---
+
+## Additional Mock Tab (for tests 31-33)
+
+Add to MOCK_TABS:
+```javascript
+{ id: 1009, title: 'GeeksforGeeks - Data Structures', url: 'https://www.geeksforgeeks.org/data-structures', windowId: 2 },
+```
+
+## Test 31: "open a tab and search" should NOT activate an existing tab
+- **Command:** `"Please open a tab and search neutral"`
+- **Bug:** Currently falls to LLM classification (no shortcut matches). The LLM mis-classifies as navigate, causing the pipeline to try to find/activate an existing tab instead of opening a new one.
+- **Expected:** `action` should NOT be `'activate_tab'` and should NOT be `'answer'`. Should be `open_url` with a search URL containing "neutral", or `open_new_tabs`. The action should involve opening something new, not finding an existing tab.
+- **Notes:** No client-side shortcut matches because `^open\s+(https?:\/\/)` requires a full URL. Needs LLM. Mock the Ollama classification endpoint to return `{ intent: "mutate", topic: "neutral", specifics: "open and search" }` to simulate the pipeline path.
+- **LLM calls:** 1 (classification)
+
+## Test 32: "open a new tab and search" should search, not just open blank tab
+- **Command:** `"Please open a new tab and search neutral"`
+- **Bug:** When LLM classifies correctly as mutate, the pipeline's `buildAction` for mutate_close with specifics "close" (default) and no matching tabs returns null and falls to LLM emission, which may produce `open_new_tabs` without the search component.
+- **Expected:** Should produce an action that involves searching for "neutral", not just `{ action: 'open_new_tabs', count: 1 }`. Ideally `{ action: 'open_url', url: '...' }` where url contains "neutral".
+- **Notes:** Mock the Ollama classification to return `{ intent: "mutate", topic: "neutral", specifics: "open and search" }`. Then mock the emission endpoint to return the action.
+- **LLM calls:** 1-2
+
+## Test 33: "Summarize the geek for geek tab" should match the GeeksforGeeks tab
+- **Command:** `"Summarize the geek for geek tab"`
+- **Bug:** `extractTopic()` removes "for" as a stop word, producing topic `"geek geek"`. This doesn't match the tab title "GeeksforGeeks" or URL "geeksforgeeks.org", so `resolveTargets` returns 0 matches. The pipeline then returns `{ action: 'summarize_tab', target: 'current' }` instead of targeting the actual GeeksforGeeks tab.
+- **Expected:** `{ action: 'summarize_tab', target: 1009 }` — should identify and summarize the GeeksforGeeks tab specifically.
+- **LLM calls:** 0 (client-side shortcut matches "summarize")

@@ -1,18 +1,48 @@
 /**
- * Test runner for pipeline.js — 30 test cases from test.md
+ * Test runner for pipeline.js — 33 test cases from test.md
  *
  * Mocks global.fetch so no real bridge/Ollama calls are made.
- * All 30 tests hit client-side shortcuts (0 LLM calls).
+ * Tests 1-30 and 33 hit client-side shortcuts (0 LLM calls).
+ * Tests 31-32 mock the Ollama /api/chat endpoint for LLM classification and emission.
  */
 
 // ── Mock global.fetch before any imports ─────────────────────────────────────
 
-global.fetch = async (url) => {
+// Track Ollama call count per test to distinguish classification vs emission calls.
+let ollamaCallCount = 0;
+let ollamaMockEnabled = false;
+
+function resetOllamaMock(enabled = false) {
+  ollamaCallCount = 0;
+  ollamaMockEnabled = enabled;
+}
+
+global.fetch = async (url, options) => {
   if (typeof url === 'string' && url.includes('/rag/search')) {
     return {
       ok: true,
       json: async () => ({ results: [] }),
     };
+  }
+  if (ollamaMockEnabled && typeof url === 'string' && url.includes('/api/chat')) {
+    ollamaCallCount++;
+    if (ollamaCallCount === 1) {
+      // First Ollama call = classification
+      return {
+        ok: true,
+        json: async () => ({
+          message: { content: JSON.stringify({ intent: 'mutate', topic: 'neutral', specifics: 'open and search' }) }
+        }),
+      };
+    } else {
+      // Subsequent Ollama calls = emission / legacy fallback
+      return {
+        ok: true,
+        json: async () => ({
+          message: { content: JSON.stringify({ action: 'open_url', url: 'https://www.google.com/search?q=neutral' }) }
+        }),
+      };
+    }
   }
   throw new Error(`Unexpected fetch call: ${url}`);
 };
@@ -32,6 +62,7 @@ const MOCK_TABS = [
   { id: 1006, title: 'Reddit - Programming', url: 'https://www.reddit.com/r/programming', windowId: 2 },
   { id: 1007, title: 'Google Docs - Meeting Notes', url: 'https://docs.google.com/doc123', windowId: 2 },
   { id: 1008, title: 'Netflix - Stranger Things', url: 'https://www.netflix.com/watch/456', windowId: 2 },
+  { id: 1009, title: 'GeeksforGeeks - Data Structures', url: 'https://www.geeksforgeeks.org/data-structures', windowId: 2 },
 ];
 
 const MOCK_CONFIG = {
@@ -101,14 +132,14 @@ async function runTest(num, description, command, check) {
   }
 }
 
-// ── Run all 30 tests ─────────────────────────────────────────────────────────
+// ── Run all 33 tests ─────────────────────────────────────────────────────────
 
 console.log('\nRunning pipeline tests...\n');
 
 await runTest(1, 'Count all tabs',
   'how many tabs do I have?',
   (r) => {
-    assertDeepEqual(r, { action: 'answer', text: 'You have 8 tabs open.' });
+    assertDeepEqual(r, { action: 'answer', text: 'You have 9 tabs open.' });
   }
 );
 
@@ -123,7 +154,7 @@ await runTest(3, 'List all tabs',
   'what tabs do I have open?',
   (r) => {
     assert(r.action === 'answer', `action: expected 'answer', got '${r.action}'`);
-    assertContains(r.text, '8', 'text');
+    assertContains(r.text, '9', 'text');
     assertContains(r.text, 'tab', 'text');
     assertContains(r.text, 'github.com', 'text');
   }
@@ -192,7 +223,7 @@ await runTest(11, 'Navigate positional - first tab',
 await runTest(12, 'Navigate positional - last tab',
   'go to the last tab',
   (r) => {
-    assertDeepEqual(r, { action: 'activate_tab', target: 1008 });
+    assertDeepEqual(r, { action: 'activate_tab', target: 1009 });
   }
 );
 
@@ -326,6 +357,67 @@ await runTest(30, 'Close non-existent domain (graceful no-op)',
   (r) => {
     assert(r.action === 'answer', `action: expected 'answer', got '${r.action}'`);
     assertContains(r.text, 'No spotify tabs found', 'text');
+  }
+);
+
+// ── Tests 31-33: LLM-dependent and bug-documenting tests ─────────────────────
+
+// Test 31: "open a tab and search" should NOT activate an existing tab
+// The pipeline: no shortcut → LLM classification (mocked as mutate) → resolveTargets
+// with topic "neutral" → 0 matches → buildAction for mutate_close with ids=[] and
+// topic="neutral" returns answer "No neutral tabs found to close." instead of falling
+// to emission. This test documents the bug: the pipeline should produce open_url, not answer.
+resetOllamaMock(true);
+await runTest(31, '"open a tab and search" should produce open_url, not activate/answer',
+  'Please open a tab and search neutral',
+  (r) => {
+    assert(r.action !== 'activate_tab',
+      `action should NOT be 'activate_tab', got '${r.action}'`);
+    assert(r.action !== 'answer',
+      `action should NOT be 'answer', got '${r.action}' (text: ${JSON.stringify(r.text)})`);
+    assert(r.action === 'open_url',
+      `action: expected 'open_url', got '${r.action}'`);
+  }
+);
+resetOllamaMock(false);
+
+// Test 32: "open a new tab and search" should search for "neutral", not just open blank tab
+// Same flow as test 31 — mocked classification returns mutate, but buildAction returns
+// answer instead of null, so emission is never reached. The test asserts the action should
+// involve searching for "neutral", documenting the bug.
+resetOllamaMock(true);
+await runTest(32, '"open a new tab and search neutral" should search for neutral',
+  'Please open a new tab and search neutral',
+  (r) => {
+    // Should NOT be just opening a blank tab
+    const isBlankOpen = r.action === 'open_new_tabs' && !r.url;
+    assert(!isBlankOpen,
+      `should not be a plain open_new_tabs without search, got ${JSON.stringify(r)}`);
+    // Should involve "neutral" somewhere — either in url or query
+    const hasNeutral = (r.url && r.url.includes('neutral')) ||
+                       (r.query && r.query.includes('neutral'));
+    assert(hasNeutral,
+      `action should involve "neutral" in url or query, got ${JSON.stringify(r)}`);
+    // With the mock emission, we expect open_url with neutral in the URL
+    assert(r.action === 'open_url',
+      `action: expected 'open_url', got '${r.action}'`);
+  }
+);
+resetOllamaMock(false);
+
+// Test 33: "Summarize the geek for geek tab" should match GeeksforGeeks tab
+// Client-side shortcut matches "summarize" → intent: 'content', specifics: 'summarize'
+// extractTopic removes "for" (stop word) → topic = "geek geek"
+// resolveTargets: "geek geek" doesn't match "GeeksforGeeks" title/URL → 0 matches
+// RAG fallback returns empty → buildAction: summarize with 0 matches → target: 'current'
+// BUG: Should return { action: 'summarize_tab', target: 1009 } but returns target: 'current'
+await runTest(33, '"Summarize the geek for geek tab" should target GeeksforGeeks tab (bug: stop word removal)',
+  'Summarize the geek for geek tab',
+  (r) => {
+    assert(r.action === 'summarize_tab',
+      `action: expected 'summarize_tab', got '${r.action}'`);
+    assert(r.target === 1009,
+      `target: expected 1009 (GeeksforGeeks tab), got ${JSON.stringify(r.target)} — bug: extractTopic removes "for" stop word, producing "geek geek" which doesn't match "GeeksforGeeks"`);
   }
 );
 
