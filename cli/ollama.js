@@ -1,4 +1,6 @@
-const SYSTEM_PROMPT = `You are tabai, a Chrome tab manager. Given the user's command and their current open tabs, return a single JSON action object. Return ONLY valid JSON, no markdown, no explanation, no preamble. Do not use thinking tags.
+import { queryFunctiongemma } from './ollama-tools.js';
+
+export const SYSTEM_PROMPT = `You are tabai, a Chrome tab manager. Given the user's command and their current open tabs, return a single JSON action object. Return ONLY valid JSON, no markdown, no explanation, no preamble. Do not use thinking tags.
 
 Available actions:
 {"action":"close_tabs","targets":[tabId,...],"reason":"description"}
@@ -74,7 +76,12 @@ Rules:
  * @param {string} [params.history] - Optional formatted history/session context
  * @returns {Promise<object>} Parsed action object from the model
  */
-export async function queryOllama({ command, tabsFormatted, config, history }) {
+export async function queryOllama({ command, tabsFormatted, config, history, tabs }) {
+  // Dispatch to tool-based strategy for functiongemma
+  if (config.model.includes('functiongemma')) {
+    return queryFunctiongemma({ command, tabsFormatted, config, history, tabs });
+  }
+
   const debug = config.debug;
   const url = `${config.ollamaUrl}/api/chat`;
 

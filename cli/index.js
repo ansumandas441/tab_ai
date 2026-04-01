@@ -382,6 +382,7 @@ async function main() {
       tabsFormatted,
       config,
       history: historyContext || undefined,
+      tabs,
     });
   } catch (err) {
     // Fallback for search-type commands when JSON parsing fails entirely
