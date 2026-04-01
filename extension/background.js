@@ -21,6 +21,16 @@ const MAX_SESSIONS     = 50;
 const NATIVE_HOST      = "com.tabai.bridge";
 
 /* ------------------------------------------------------------------ */
+/*  Debug logging                                                     */
+/* ------------------------------------------------------------------ */
+
+function dbg(...args) {
+  console.log("[tabai]", ...args);
+}
+
+dbg("Service worker starting. Extension ID:", chrome.runtime.id);
+
+/* ------------------------------------------------------------------ */
 /*  In-memory tab index (flushed to storage on every mutation)        */
 /* ------------------------------------------------------------------ */
 
@@ -159,6 +169,7 @@ function shouldIndex(url) {
 /* ------------------------------------------------------------------ */
 
 async function buildIndex() {
+  dbg("buildIndex: starting...");
   try {
     const tabs = await chrome.tabs.query({});
     tabIndex = {};
@@ -166,7 +177,9 @@ async function buildIndex() {
       tabIndex[tab.id] = compact(tab);
     }
     await flushIndex();
+    dbg("buildIndex: indexed", Object.keys(tabIndex).length, "tabs");
   } catch (e) {
+    dbg("buildIndex: FAILED", e.message);
     console.error("tabai: buildIndex failed", e);
   }
 }
@@ -284,21 +297,31 @@ if (chrome.tabGroups && chrome.tabGroups.onUpdated) {
 /*  Native messaging                                                  */
 /* ------------------------------------------------------------------ */
 
+let connectAttempts = 0;
+
 function connectNative() {
+  connectAttempts++;
+  dbg("connectNative: attempt #" + connectAttempts, "| host:", NATIVE_HOST);
+  dbg("connectNative: extension ID is:", chrome.runtime.id);
+  dbg("connectNative: allowed_origins in manifest must include: chrome-extension://" + chrome.runtime.id + "/");
+
   if (nativePort) {
+    dbg("connectNative: disconnecting previous port");
     try { nativePort.disconnect(); } catch (_) {}
   }
 
   try {
     nativePort = chrome.runtime.connectNative(NATIVE_HOST);
+    dbg("connectNative: connectNative() returned successfully, port created");
   } catch (e) {
+    dbg("connectNative: EXCEPTION on connectNative():", e.message);
     console.error("tabai: connectNative failed", e);
     scheduleReconnect();
     return;
   }
 
   nativePort.onMessage.addListener(async (msg) => {
-    // msg = { id: "...", action: "...", params: {...} }
+    dbg("onMessage: received from native host:", JSON.stringify(msg).slice(0, 200));
     let response;
     try {
       response = await handleAction(msg);
@@ -307,13 +330,18 @@ function connectNative() {
     }
     try {
       nativePort.postMessage(response);
+      dbg("onMessage: sent response for action:", msg.action, "id:", msg.id);
     } catch (e) {
+      dbg("onMessage: postMessage FAILED:", e.message);
       console.error("tabai: postMessage failed", e);
     }
   });
 
   nativePort.onDisconnect.addListener(() => {
     const err = chrome.runtime.lastError;
+    dbg("onDisconnect: native port disconnected!");
+    dbg("onDisconnect: lastError:", err ? err.message : "(none)");
+    dbg("onDisconnect: this was attempt #" + connectAttempts);
     console.warn("tabai: native port disconnected", err ? err.message : "");
     nativePort = null;
     scheduleReconnect();
@@ -322,10 +350,12 @@ function connectNative() {
 
 function scheduleReconnect() {
   if (reconnectTimer) clearTimeout(reconnectTimer);
+  const delay = Math.min(3000 * connectAttempts, 30000); // back off up to 30s
+  dbg("scheduleReconnect: will retry in", delay + "ms");
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     connectNative();
-  }, 3000);
+  }, delay);
 }
 
 // Connect on startup
@@ -333,11 +363,13 @@ connectNative();
 
 // Also reconnect when service worker wakes up
 chrome.runtime.onStartup.addListener(() => {
+  dbg("onStartup event fired");
   buildIndex();
   connectNative();
 });
 
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener((details) => {
+  dbg("onInstalled event fired, reason:", details.reason);
   buildIndex();
   connectNative();
 });
