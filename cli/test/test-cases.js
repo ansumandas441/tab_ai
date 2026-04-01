@@ -217,4 +217,81 @@ export const TEST_CASES = [
       action: 'duplicate_tab',
     },
   },
+
+  // ── Natural language (no clear action keyword) ────────────────────────
+  {
+    name: 'NL: get rid of youtube',
+    command: "get rid of the youtube tabs",
+    expect: {
+      action: 'close_tabs',
+      targets: [2, 3],
+    },
+  },
+  {
+    name: "NL: I'm done with twitter",
+    command: "I'm done with twitter",
+    expect: {
+      action: 'close_tabs',
+      targets: [6],
+    },
+  },
+  {
+    name: 'NL: keep only gmail',
+    command: 'keep only gmail',
+    expect: {
+      action: 'close_all_except',
+      keep: [5],
+    },
+  },
+  {
+    name: 'NL: take me to github',
+    command: 'take me to my github',
+    expect: {
+      action: 'activate_tab',
+      target: 1,
+    },
+  },
+  {
+    name: 'NL: the noisy one',
+    command: 'the noisy one, shut it up',
+    expect: {
+      action: 'mute_tabs',
+    },
+  },
+  {
+    name: 'NL: sort tabs by site',
+    command: 'sort my tabs by site',
+    expect: {
+      action: 'group_tabs',
+    },
+  },
+  {
+    name: 'NL: save my work',
+    command: 'save my work',
+    expect: {
+      action: 'save_session',
+    },
+  },
+  {
+    name: 'NL: old tabs back',
+    command: 'I need my old tabs back',
+    expect: {
+      action: 'restore_last_closed',
+    },
+  },
+  {
+    name: 'NL: too many tabs',
+    command: 'too many tabs, clean up',
+    expect: {
+      action: 'close_duplicates',
+    },
+  },
+  {
+    name: 'NL: bring up stackoverflow',
+    command: 'bring up the stackoverflow tab',
+    expect: {
+      action: 'activate_tab',
+      target: 4,
+    },
+  },
 ];

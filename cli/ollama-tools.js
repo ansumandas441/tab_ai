@@ -271,7 +271,7 @@ function resolveL3(action, cmd, command, tabs) {
       return resolveCloseTargets(cmd, tabs);
 
     case 'close_all_except':
-      return resolveKeepTargets(cmd, tabs);
+      return resolveKeepTargets(cmd, command, tabs);
 
     case 'close_duplicates':
       return { action: 'close_duplicates', keep: 'first' };
@@ -390,19 +390,39 @@ function resolveCloseTargets(cmd, tabs) {
   return { action: 'close_tabs', targets: allSeqIds(tabs) };
 }
 
-function resolveKeepTargets(cmd, tabs) {
-  const after = cmd.match(/(?:except|but not|but keep|but)\s+(.+)/i);
-  if (after) {
-    const phrase = after[1].replace(/\btabs?\b/gi, '').trim();
-    const domain = KNOWN_DOMAINS.find(d => phrase.includes(d));
-    if (domain) return { action: 'close_all_except', keep: tabsMatchingDomain(tabs, domain) };
-    const kw = phrase.split(/\s+/).filter(w => w.length > 1);
-    if (kw.length > 0) {
-      const m = tabsMatchingKeywords(tabs, kw);
-      if (m.length > 0) return { action: 'close_all_except', keep: m };
-    }
+function resolveKeepTargets(cmd, originalCmd, tabs) {
+  // "close all except X" / "close everything but X"
+  const afterExcept = cmd.match(/(?:except|but not|but keep|but)\s+(.+)/i);
+  if (afterExcept) {
+    const keep = extractKeepFromPhrase(afterExcept[1], tabs);
+    if (keep.length > 0) return { action: 'close_all_except', keep };
   }
+
+  // NL: "keep only X" / "only keep X"
+  const afterKeep = cmd.match(/(?:keep\s+only|only\s+keep)\s+(.+)/i);
+  if (afterKeep) {
+    const keep = extractKeepFromPhrase(afterKeep[1], tabs);
+    if (keep.length > 0) return { action: 'close_all_except', keep };
+  }
+
+  // Last resort: scan the whole command for a domain/keyword to keep
+  const domain = findDomain(cmd);
+  if (domain) return { action: 'close_all_except', keep: tabsMatchingDomain(tabs, domain) };
+
   return { action: 'close_all_except', keep: [] };
+}
+
+function extractKeepFromPhrase(phrase, tabs) {
+  const cleaned = phrase.replace(/\btabs?\b/gi, '').trim();
+  const domain = KNOWN_DOMAINS.find(d => cleaned.includes(d));
+  if (domain) return tabsMatchingDomain(tabs, domain);
+  // Try matching against tab titles/URLs
+  const kw = cleaned.split(/\s+/).filter(w => w.length > 1);
+  if (kw.length > 0) {
+    const m = tabsMatchingKeywords(tabs, kw);
+    if (m.length > 0) return m;
+  }
+  return [];
 }
 
 function resolveOpenUrl(cmd) {
@@ -525,6 +545,200 @@ function safeHost(url) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+//  NATURAL LANGUAGE LAYER — for commands without clear action keywords
+// ═══════════════════════════════════════════════════════════════════════════
+//
+//  When L1 keywords fail, the command is natural language without an obvious
+//  verb. This layer catches idiomatic/colloquial phrasings before falling
+//  back to AI.
+//
+//  Pipeline:  NL keywords → NL AI (few-shot examples) → L2 → L3
+//
+//  The NL AI prompts include concrete examples so the 270M model can
+//  pattern-match against real phrasings instead of understanding semantics.
+
+// ── NL keyword patterns (soft / idiomatic) ──────────────────────────────
+
+const NL_KEYWORDS = [
+  // ── Implied CLOSE ─────────────────────────────────────────────────────
+  // "get rid of X", "I don't need X", "done with X", "clean up", "nuke"
+  { group: 'close', pattern: /\b(get\s+rid\s+of|don'?t\s+need|done\s+with|i'?m\s+done|clean\s+(them\s+)?up|too\s+many\s+tabs|trim\s+tabs|nuke|clear\s+out|wipe)\b/ },
+  // "keep only X" → close_all_except
+  { group: 'close', pattern: /\b(keep\s+only|only\s+keep)\b/ },
+
+  // ── Implied NAVIGATE ──────────────────────────────────────────────────
+  // "take me to X", "bring up X", "I need my X tab", "let me see X"
+  { group: 'navigate', pattern: /\b(take\s+me\s+to|bring\s+up|i\s+need\s+my\s+\S+\s+tab|let\s+me\s+see|pull\s+up\s+(the\s+)?(?!a\s+new))\b/ },
+  // "the one I was just on", "my last tab", "previous tab"
+  { group: 'navigate', pattern: /\b(the\s+one\s+i\s+was|my\s+last\s+tab|previous\s+tab|that\s+\S+\s+thing)\b/ },
+
+  // ── Implied ORGANIZE ──────────────────────────────────────────────────
+  // "sort my tabs", "tidy up", "arrange", "organize"
+  { group: 'organize', pattern: /\b(sort\s+(my\s+)?tabs|tidy|arrange|organize\s+tabs?)\b/ },
+  // "the noisy one", "too loud", "shut it up", "quiet" (→ mute)
+  { group: 'organize', pattern: /\b(noisy|too\s+loud|shut\s+(it|them)\s+up|quiet\s+(it|the|that|them)|silence)\b/ },
+  // "save this page", "remember this" (→ bookmark, not session)
+  { group: 'organize', pattern: /\b(save\s+this\s+(page|tab|url|link)|remember\s+this\s+(page|tab|url|link))\b/ },
+
+  // ── Implied CONTENT / RAG ─────────────────────────────────────────────
+  // "where did I read about X", "which page mentions X", "I was reading about X"
+  { group: 'content', pattern: /\b(where\s+did\s+i\s+read|which\s+page\s+(mentions?|talks?|has)|i\s+was\s+reading\s+about|that\s+article\s+about|find\s+(me\s+)?(the\s+|that\s+)?article)\b/ },
+  // "anything about X in my tabs", "do any tabs mention X"
+  { group: 'content', pattern: /\b(anything\s+about\s+\S+\s+in\s+my|do\s+any\s+(tabs?|pages?)\s+mention|which\s+tab\s+(mentions?|talks?\s+about))\b/ },
+
+  // ── Implied SESSION ───────────────────────────────────────────────────
+  // "save my work", "save everything", "I need my old tabs back"
+  { group: 'session', pattern: /\b(save\s+my\s+work|save\s+everything|i\s+need\s+my\s+old\s+tabs|old\s+tabs\s+back|what\s+did\s+i\s+have\s+before|bring\s+back\s+my\s+tabs)\b/ },
+
+  // ── Implied OPEN ──────────────────────────────────────────────────────
+  // "I need to check X", "get me X", "let me visit X", "pull up a new"
+  { group: 'open', pattern: /\b(i\s+need\s+to\s+check|get\s+me\s+(?!my)|let\s+me\s+visit|pull\s+up\s+a\s+new)\b/ },
+
+  // ── Implied INFO ──────────────────────────────────────────────────────
+  // "what's going on", "how's my browser", "anything about X?"
+  { group: 'info', pattern: /\b(what'?s\s+going\s+on|how'?s\s+my\s+(browser|chrome)|status|overview)\b/ },
+  // "anything about X?" without "page"/"content" (tab title search, not RAG)
+  { group: 'info', pattern: /\banything\s+about\s+\S+\s*\??$/ },
+];
+
+function resolveNL(cmd) {
+  for (const { group, pattern } of NL_KEYWORDS) {
+    if (pattern.test(cmd)) return group;
+  }
+  return null;
+}
+
+// ── NL sub-classification (L2 refinement for NL-detected groups) ────────
+// Some NL patterns imply a specific L2 action directly, bypassing L2 keywords.
+
+function resolveNL_L2(group, cmd) {
+  if (group === 'close') {
+    if (/\b(keep\s+only|only\s+keep)\b/.test(cmd))  return 'close_all_except';
+    if (/\b(clean\s+up|too\s+many|trim)\b/.test(cmd)) return 'close_duplicates';
+    return 'close_tabs';
+  }
+  if (group === 'organize') {
+    if (/\b(noisy|loud|shut.*up|quiet|silence)\b/.test(cmd)) return 'mute_tabs';
+    if (/\b(sort|tidy|arrange|organize)\b/.test(cmd))        return 'group_tabs';
+    if (/\b(save\s+this|remember\s+this)\b/.test(cmd))       return 'bookmark_tabs';
+  }
+  if (group === 'session') {
+    if (/\b(save|everything)\b/.test(cmd))                    return 'save_session';
+    if (/\b(old\s+tabs|back|before|bring\s+back)\b/.test(cmd)) return 'restore_last_closed';
+  }
+  if (group === 'content') {
+    if (/\b(where\s+did|which\s+page|anything\s+about|mentions?)\b/.test(cmd)) return 'search_content';
+    if (/\b(that\s+article|i\s+was\s+reading)\b/.test(cmd))  return 'search_content';
+  }
+  return null; // fall through to regular L2
+}
+
+// ── NL AI prompts (few-shot examples for the 270M model) ────────────────
+
+const NL_L1_SYSTEM = `The user command uses natural language without a clear action verb.
+Match their intent to the right function.
+
+Examples:
+- "get rid of the youtube tabs" → remove
+- "I don't need twitter anymore" → remove
+- "keep only gmail" → remove
+- "take me to my github" → go_to
+- "bring up the stackoverflow tab" → go_to
+- "I need my gmail tab" → go_to
+- "that react thing" → go_to
+- "the noisy one" → organize
+- "sort my tabs by site" → organize
+- "tidy up" → organize
+- "save this page" → organize
+- "I was reading about kubernetes" → content
+- "which page talks about docker" → content
+- "anything about react in my tabs?" → content
+- "find me that article about testing" → content
+- "save my work" → session
+- "I need my old tabs back" → session
+- "I need to check hacker news" → new_site
+- "get me reddit" → new_site
+- "what's going on with my browser" → question
+- "how many do I have" → question
+
+Pick one function:`;
+
+const NL_L1_AI_TOOLS = [
+  aiTool('remove',   'Close, remove, get rid of, clean up tabs'),
+  aiTool('new_site', 'Open or visit a new website'),
+  aiTool('go_to',    'Switch to, take me to, find an existing tab'),
+  aiTool('organize', 'Sort, tidy, mute, quiet, save/bookmark a page'),
+  aiTool('question', 'List, count, tell me about tabs. Answer questions.'),
+  aiTool('session',  'Save my work, restore old tabs, bring back tabs'),
+  aiTool('content',  'Search page content, find article, I was reading about X'),
+];
+
+// Map NL AI tool names back to standard group names
+const NL_TO_GROUP = {
+  remove:   'close',
+  new_site: 'open',
+  go_to:    'navigate',
+  organize: 'organize',
+  question: 'info',
+  session:  'session',
+  content:  'content',
+};
+
+// ── NL L2 AI prompts (per-group, with examples) ────────────────────────
+
+const NL_L2_CLOSE_SYSTEM = `The user wants to close/remove tabs using natural language.
+
+Examples:
+- "get rid of youtube tabs" → close_tabs
+- "I'm done with social media" → close_tabs
+- "keep only gmail, remove rest" → close_all_except
+- "clean up duplicates" → close_duplicates
+- "too many tabs, trim them" → close_duplicates
+
+Pick one:`;
+
+const NL_L2_ORGANIZE_SYSTEM = `The user wants to organize tabs using natural language.
+
+Examples:
+- "the noisy one" → mute_tabs
+- "too loud" → mute_tabs
+- "sort by website" → group_tabs
+- "tidy up my tabs" → group_tabs
+- "save this page for later" → bookmark_tabs
+- "remember this link" → bookmark_tabs
+
+Pick one:`;
+
+const NL_L2_SESSION_SYSTEM = `The user wants a session or history action.
+
+Examples:
+- "save my work" → save_session
+- "save everything" → save_session
+- "I need my old tabs back" → restore_last_closed
+- "bring back my tabs" → restore_last_closed
+- "what did I have before" → list_history
+
+Pick one:`;
+
+const NL_L2_CONTENT_SYSTEM = `The user is looking for something they read or page content.
+
+Examples:
+- "where did I read about docker" → search_content
+- "which page mentions kubernetes" → search_content
+- "I was reading about testing" → search_content
+- "find me that article about react" → search_content
+- "anything about machine learning" → search_content
+
+Pick one:`;
+
+const NL_L2_AI_MAP = {
+  close:    { system: NL_L2_CLOSE_SYSTEM,    tools: L2_CLOSE.aiTools },
+  organize: { system: NL_L2_ORGANIZE_SYSTEM, tools: L2_ORGANIZE.aiTools },
+  session:  { system: NL_L2_SESSION_SYSTEM,  tools: L2_SESSION.aiTools },
+  content:  { system: NL_L2_CONTENT_SYSTEM,  tools: L2_CONTENT.aiTools },
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
 //  AI FALLBACK — called only when keywords can't resolve a layer
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -592,42 +806,59 @@ export async function queryFunctiongemma({ command, tabsFormatted, config, histo
   tabs = tabs || [];
   const cmd = command.toLowerCase();
 
-  // ── LAYER 1: Determine action group ─────────────────────────────────
+  // ── LAYER 1: Determine action group (keyword match) ─────────────────
   let group = resolveL1(cmd);
   if (debug) log(`L1 keyword → ${group ?? '(none)'}`);
 
+  // ── NL LAYER: Natural language classification ───────────────────────
+  // If L1 keywords didn't match, try softer NL patterns before AI.
+  let nlDetected = false;
   if (!group) {
-    group = await aiPickTool(
-      config,
-      'Pick the ONE function that matches the user command.',
-      command,  // just the command, no tabs — keep it short
-      L1_AI_TOOLS,
-      debug, 'L1',
-    );
-    if (debug) log(`L1 AI → ${group ?? '(none)'}`);
+    group = resolveNL(cmd);
+    if (group) nlDetected = true;
+    if (debug) log(`NL keyword → ${group ?? '(none)'}`);
+  }
+
+  // ── AI FALLBACK: Few-shot examples for truly ambiguous commands ─────
+  if (!group) {
+    group = await aiPickTool(config, NL_L1_SYSTEM, command, NL_L1_AI_TOOLS, debug, 'NL-L1-AI');
+    if (group) {
+      group = NL_TO_GROUP[group] || group;
+      nlDetected = true;
+    }
+    if (debug) log(`NL-L1 AI → ${group ?? '(none)'}`);
   }
   if (!group) return buildInfoAnswer(command, tabs);
 
   // ── LAYER 2: Determine specific action ──────────────────────────────
-  let action = resolveL2(group, cmd);
-  if (debug) log(`L2 keyword (${group}) → ${action ?? '(none)'}`);
+  let action;
 
+  // If NL-detected, try NL-specific L2 first (handles "noisy" → mute, etc.)
+  if (nlDetected) {
+    action = resolveNL_L2(group, cmd);
+    if (debug && action) log(`NL-L2 → ${action}`);
+  }
+
+  // Regular L2 keyword resolution
   if (!action) {
-    const spec = L2_MAP[group];
+    action = resolveL2(group, cmd);
+    if (debug) log(`L2 keyword (${group}) → ${action ?? '(none)'}`);
+  }
+
+  // L2 AI fallback — use NL few-shot prompts if available, else generic
+  if (!action) {
+    const nlSpec = nlDetected && NL_L2_AI_MAP[group];
+    const spec = nlSpec || L2_MAP[group];
     if (spec?.aiTools) {
-      action = await aiPickTool(
-        config,
-        `The user wants to ${group} tabs. Pick the specific action.`,
-        command,
-        spec.aiTools,
-        debug, 'L2',
-      );
+      const sysMsg = nlSpec?.system || `The user wants to ${group} tabs. Pick the specific action.`;
+      const tools = spec.tools || spec.aiTools;
+      action = await aiPickTool(config, sysMsg, command, tools, debug, 'L2-AI');
       if (debug) log(`L2 AI → ${action ?? '(none)'}`);
     }
   }
   if (!action) return buildInfoAnswer(command, tabs);
 
-  // ── LAYER 3: Resolve parameters ─────────────────────────────────────
+  // ── LAYER 3: Resolve parameters (deterministic) ─────────────────────
   const result = resolveL3(action, cmd, command, tabs);
   if (debug) log('L3 →', JSON.stringify(result));
 
