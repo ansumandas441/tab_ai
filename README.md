@@ -105,6 +105,8 @@ cp /path/to/tabai/extension/com.tabai.bridge.json \
 ```
 
 > **Note:** If you use nvm, the node path is hardcoded in `native-host-wrapper.c`. If your node location differs from the default, edit the `node` variable in the C file before compiling.
+>
+> **When to recompile:** You only need to run `cc -o native-host-bin native-host-wrapper.c` again if you change the node path in the C file (e.g., after an nvm node version upgrade). Changes to `native-host.js` do not require recompiling.
 
 **Linux:**
 
