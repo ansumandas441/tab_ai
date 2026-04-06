@@ -67,6 +67,12 @@ const URL_MAP = {
 const L1_KEYWORDS = [
   // Order matters: more specific patterns first
   { group: 'content',  pattern: /\b(index\s+(all\s+)?(the\s+)?tabs?|summarize|summarise|search\s+content|read\s+(all\s+)?(the\s+)?tabs?|page\s+content|what\s+is\s+this\s+page|document\s+(all\s+)?(the\s+)?tabs?)\b/ },
+  // Content-search queries: "which tab talks about X", "what tab is about X", "do I have a tab about X"
+  { group: 'content',  pattern: /\b(which|what)\b.*\btabs?\b.*\b(about|talk|discuss|mention|content)\b/ },
+  { group: 'content',  pattern: /\btabs?\b.*\b(talk|discuss|mention)(s|ing)?\s+(about\b)/ },
+  { group: 'content',  pattern: /\bdo\s+i\s+have\b.*\btabs?\b.*\babout\b/ },
+  // "open the tab about X", "open all tabs about X" — routes to content for open_from_search
+  { group: 'content',  pattern: /\bopen\b.*\btabs?\b.*\b(about|talk|discuss|mention)\b/ },
   { group: 'session',  pattern: /\b(save\s+(this\s+|my\s+)?session|restore|undo|history|sessions?\b.*\b(list|show))\b/ },
   { group: 'close',    pattern: /\b(close|remove|kill|delete)\b/ },
   { group: 'organize', pattern: /\b(unpin|pin|unmute|mute|group|bookmark|reload|refresh|duplicate|copy\s+tab|discard|move\s+tab)\b/ },
@@ -224,10 +230,11 @@ const L2_SESSION = {
 
 const L2_CONTENT = {
   keywords: [
-    { action: 'summarize_tab',   pattern: /\bsummar/ },
-    { action: 'search_content',  pattern: /\bsearch\b|\bfind\b.*\bcontent\b|\bwhat.*talk|which.*about\b/ },
-    { action: 'index_tabs',      pattern: /\bindex|\bread\b.*\btab|\bload\b.*\bcontent\b|\bdocument\b/ },
-    { action: 'open_from_search', pattern: /\bopen\b.*\b(about|content|talk)\b/ },
+    { action: 'summarize_tab',    pattern: /\bsummar/ },
+    // open_from_search BEFORE search_content — "open" is a more specific intent
+    { action: 'open_from_search', pattern: /\bopen\b.*\b(about|content|talks?|discuss|mention)\b/ },
+    { action: 'search_content',   pattern: /\bsearch\b|\bfind\b.*\bcontent\b|\b(what|which)\b.*\b(talk|about)\b|\b(talk|discuss|mention)(s|ing)?\s+about\b|\bdo\s+i\s+have\b.*\babout\b/ },
+    { action: 'index_tabs',       pattern: /\bindex|\bread\b.*\btab|\bload\b.*\bcontent\b|\bdocument\b/ },
   ],
   aiTools: [
     aiTool('index_tabs',       'Index tab pages for content search'),
@@ -357,7 +364,12 @@ function resolveL3(action, cmd, command, tabs) {
     }
 
     case 'search_content': {
-      const terms = extractSearchTerms(cmd, ['search', 'content', 'find', 'about', 'pages', 'tabs', 'page']);
+      const terms = extractSearchTerms(cmd, [
+        'search', 'content', 'find', 'about', 'pages', 'tabs', 'tab', 'page',
+        'which', 'what', 'talks', 'talk', 'talking', 'discusses', 'discuss',
+        'discussing', 'mentions', 'mention', 'mentioning', 'the', 'a', 'is',
+        'do', 'i', 'have', 'does', 'any', 'that', 'my',
+      ]);
       return { action: 'search_content', query: terms };
     }
 

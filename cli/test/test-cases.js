@@ -329,6 +329,49 @@ export const TEST_CASES = [
     },
   },
   {
+    name: 'Which tab talks about X',
+    command: 'Which tab talks about machine learning?',
+    expect: {
+      action: 'search_content',
+      fields: { query: (v) => typeof v === 'string' && v.includes('machine') && v.includes('learning') },
+    },
+  },
+  {
+    name: 'What tab is about X',
+    command: 'What tab is about neural networks?',
+    expect: {
+      action: 'search_content',
+      fields: { query: (v) => typeof v === 'string' && v.includes('neural') },
+    },
+  },
+  {
+    name: 'Tab that discusses X',
+    command: 'do I have a tab about kubernetes?',
+    expect: {
+      action: 'search_content',
+      fields: { query: (v) => typeof v === 'string' && v.includes('kubernetes') },
+    },
+  },
+  {
+    name: 'Open tab that talks about X',
+    command: 'Please open the tab which talks about machine learning',
+    expect: {
+      action: 'open_from_search',
+      fields: { query: (v) => typeof v === 'string' && v.includes('machine') && v.includes('learning') },
+    },
+  },
+  {
+    name: 'Open all tabs about X',
+    command: 'open all tabs about kubernetes',
+    expect: {
+      action: 'open_from_search',
+      fields: {
+        query: (v) => typeof v === 'string' && v.includes('kubernetes'),
+        all: true,
+      },
+    },
+  },
+  {
     name: 'Summarize current tab',
     command: 'summarize this tab',
     expect: {
