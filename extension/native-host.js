@@ -20,6 +20,25 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const { randomUUID } = require("crypto");
+
+// Crash logging: write to a file so we can diagnose Chrome-launched crashes
+const CRASH_LOG = path.join(require("os").homedir(), ".tabai", "native-host.log");
+function crashLog(msg) {
+  try {
+    const dir = path.dirname(CRASH_LOG);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(CRASH_LOG, new Date().toISOString() + " " + msg + "\n");
+  } catch (_) {}
+}
+process.on("uncaughtException", (err) => {
+  crashLog("UNCAUGHT EXCEPTION: " + err.stack);
+  process.exit(1);
+});
+process.on("unhandledRejection", (reason) => {
+  crashLog("UNHANDLED REJECTION: " + (reason && reason.stack ? reason.stack : String(reason)));
+});
+crashLog("=== native-host.js starting, pid=" + process.pid + " args=" + JSON.stringify(process.argv));
+
 const rag = require("./rag");
 
 /* ------------------------------------------------------------------ */
@@ -415,22 +434,38 @@ setInterval(() => {
 // Ensure stdin stays open for native messaging
 process.stdin.resume();
 process.stdin.on("end", () => {
+  crashLog("stdin closed (Chrome disconnected). Shutting down.");
   log("stdin closed (Chrome disconnected). Shutting down.");
   server.close();
   process.exit(0);
 });
 
-server.listen(PORT, "127.0.0.1", () => {
-  log("HTTP bridge listening on http://127.0.0.1:" + PORT);
-});
+let listenRetries = 0;
+const MAX_LISTEN_RETRIES = 5;
+
+function startListening() {
+  server.listen(PORT, "127.0.0.1", () => {
+    log("HTTP bridge listening on http://127.0.0.1:" + PORT);
+    crashLog("HTTP bridge listening on port " + PORT);
+  });
+}
 
 server.on("error", (err) => {
+  crashLog("SERVER ERROR: " + err.code + " " + err.message + " (retry " + listenRetries + ")");
   if (err.code === "EADDRINUSE") {
-    log("Port " + PORT + " is already in use. Is another bridge running?");
+    listenRetries++;
+    if (listenRetries <= MAX_LISTEN_RETRIES) {
+      log("Port " + PORT + " in use, retrying in 1s (attempt " + listenRetries + "/" + MAX_LISTEN_RETRIES + ")");
+      setTimeout(startListening, 1000);
+      return;
+    }
+    log("Port " + PORT + " is already in use after " + MAX_LISTEN_RETRIES + " retries. Is another bridge running?");
     process.exit(1);
   }
   log("Server error:", err.message);
 });
+
+startListening();
 
 // Graceful shutdown
 process.on("SIGINT",  () => { server.close(); process.exit(0); });

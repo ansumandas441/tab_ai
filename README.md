@@ -5,7 +5,7 @@ tabai is a CLI tool that lets you control Google Chrome from your terminal using
 ## Quick Start
 
 ```sh
-# 1. Install CLI
+# 1. Install CLI (also auto-compiles the native messaging binary on macOS)
 cd /Users/(username)/Documents/browser_assistant/tabai/cli
 npm install
 npm link
@@ -20,14 +20,13 @@ ollama pull qwen3.5:2b
 #    Copy the Extension ID Chrome assigns
 
 # 4. Register native messaging host (macOS)
-chmod +x /Users/(username)/Documents/browser_assistant/tabai/extension/native-host.js
 mkdir -p ~/Library/Application\ Support/Google/Chrome/NativeMessagingHosts
 cp /Users/(username)/Documents/browser_assistant/tabai/extension/com.tabai.bridge.json \
    ~/Library/Application\ Support/Google/Chrome/NativeMessagingHosts/
 
 # 5. Edit the copied manifest to set your actual values
 #    File: ~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.tabai.bridge.json
-#    Set "path" to: "/Users/(username)/Documents/browser_assistant/tabai/extension/native-host.js"
+#    Set "path" to: "/Users/(username)/Documents/browser_assistant/tabai/extension/native-host-bin"
 #    Set "allowed_origins" to: ["chrome-extension://YOUR_EXTENSION_ID/"]
 
 # 6. Reload the extension at chrome://extensions (click refresh icon)
@@ -63,7 +62,7 @@ npm install
 npm link
 ```
 
-This makes the `tabai` command available globally.
+This makes the `tabai` command available globally. On macOS, `npm install` also automatically compiles the native messaging binary (`native-host-bin`) using your current node path.
 
 ### 3. Load the Chrome extension
 
@@ -77,39 +76,47 @@ This makes the `tabai` command available globally.
 
 The bridge server needs to be registered as a Chrome native messaging host.
 
+> **macOS important:** Chrome on macOS requires the native messaging host to be a **compiled Mach-O binary**, not a script. Even with a valid shebang and `chmod +x`, Chrome will silently refuse to execute `.js` or `.sh` files — the process dies before the first line of code runs. The solution is a tiny C wrapper (`native-host-wrapper.c`) that `exec`s node with `native-host.js`. This binary is **automatically compiled** during `npm install` (step 2).
+
 **macOS:**
 
 ```sh
-# Make the native host executable
-chmod +x /path/to/browser_assistant/tabai/extension/native-host.js
+# The binary (native-host-bin) was already built by npm install.
+# If you need to rebuild manually:
+#   cd /path/to/tabai/extension
+#   cc -DNODE_PATH='"'$(which node)'"' -o native-host-bin native-host-wrapper.c
 
 # Create the manifest directory if it doesn't exist
 mkdir -p ~/Library/Application\ Support/Google/Chrome/NativeMessagingHosts
 
 # Copy the manifest
-cp /path/to/browser_assistant/tabai/extension/com.tabai.bridge.json \
+cp /path/to/tabai/extension/com.tabai.bridge.json \
    ~/Library/Application\ Support/Google/Chrome/NativeMessagingHosts/
 
-# Edit the manifest to set the correct path
-# Open the file and update two fields:
-#   "path": "/path/to/browser_assistant/tabai/extension/native-host.js"
+# Edit the manifest to set the correct path and extension ID:
+#   "path": "/path/to/tabai/extension/native-host-bin"
 #   "allowed_origins": ["chrome-extension://YOUR_EXTENSION_ID/"]
 ```
+
+> **Note:** The node path is baked into the binary at compile time (from `which node`). If you switch node versions via nvm, re-run `npm install` in `cli/` to recompile. Changes to `native-host.js` do not require recompiling.
 
 **Linux:**
 
 ```sh
-chmod +x /path/to/browser_assistant/tabai/extension/native-host.js
+# On Linux, Chrome can run scripts directly — no binary wrapper needed
+chmod +x /path/to/tabai/extension/native-host.js
 
 mkdir -p ~/.config/google-chrome/NativeMessagingHosts
 
-cp /path/to/browser_assistant/tabai/extension/com.tabai.bridge.json \
+cp /path/to/tabai/extension/com.tabai.bridge.json \
    ~/.config/google-chrome/NativeMessagingHosts/
 
-# Edit the manifest: update "path" and "allowed_origins" as above
+# Edit the manifest: set "path" and "allowed_origins"
+#   "path": "/path/to/tabai/extension/native-host.js"
+#   "allowed_origins": ["chrome-extension://YOUR_EXTENSION_ID/"]
 ```
 
-Replace `/path/to/browser_assistant` with your actual path, and `YOUR_EXTENSION_ID` with the ID from step 3.
+Replace `/path/to/tabai` with your actual path, and `YOUR_EXTENSION_ID` with the ID from step 3.
 
 ### 5. Pull the Ollama model
 
@@ -287,7 +294,9 @@ Terminal                 Bridge Server              Chrome Extension
 - Verify the native messaging host manifest is in the correct directory:
   - macOS: `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.tabai.bridge.json`
   - Linux: `~/.config/google-chrome/NativeMessagingHosts/com.tabai.bridge.json`
-- Check that the `path` in the manifest points to the actual location of `native-host.js`
+- Check that the `path` in the manifest points to the correct file:
+  - macOS: must point to `native-host-bin` (the compiled binary), **not** `native-host.js`
+  - Linux: can point to `native-host.js` directly
 - Check that the `allowed_origins` contains your extension's ID
 - Reload the extension at `chrome://extensions` (click the refresh icon)
 
@@ -318,16 +327,22 @@ cd tabai/cli && npm link
 
 ### Chrome closes the native messaging connection immediately
 
+- **macOS: make sure you compiled the binary wrapper.** Chrome on macOS will not execute scripts (`.js`, `.sh`) as native messaging hosts — it requires a Mach-O binary. If you see repeated "Native host has exited" errors, this is almost certainly the cause. Fix:
+  ```sh
+  cd tabai/extension
+  cc -o native-host-bin native-host-wrapper.c
+  chmod +x native-host-bin
+  ```
+  Then ensure the manifest `path` points to `native-host-bin`, not `native-host.js`.
 - Run `native-host.js` manually to check for startup errors:
   ```sh
-  # The native messaging protocol requires a 4-byte length prefix, so a simple echo won't work.
-  # Instead, just run it to verify it starts without crashing:
   node tabai/extension/native-host.js 2>&1 &
   # Then test the HTTP bridge:
   curl http://127.0.0.1:9999/ping
   # Kill it when done:
   kill %1
   ```
+- Check `~/.tabai/native-host.log` for crash logs written by the native host.
 - Check Chrome's extension service worker logs: go to `chrome://extensions`, find tabai bridge, and click "Inspect views: service worker"
 
 ### Tabs not tracked after Chrome restart
