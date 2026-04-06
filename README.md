@@ -5,7 +5,7 @@ tabai is a CLI tool that lets you control Google Chrome from your terminal using
 ## Quick Start
 
 ```sh
-# 1. Install CLI
+# 1. Install CLI (also auto-compiles the native messaging binary on macOS)
 cd /Users/(username)/Documents/browser_assistant/tabai/cli
 npm install
 npm link
@@ -19,28 +19,22 @@ ollama pull qwen3.5:2b
 #    Click "Load unpacked" → select /Users/(username)/Documents/browser_assistant/tabai/extension
 #    Copy the Extension ID Chrome assigns
 
-# 4. Build the native messaging host binary (macOS)
-#    Chrome on macOS requires a Mach-O binary — scripts won't work.
-cd /Users/(username)/Documents/browser_assistant/tabai/extension
-cc -o native-host-bin native-host-wrapper.c
-chmod +x native-host-bin
-
-# 5. Register native messaging host (macOS)
+# 4. Register native messaging host (macOS)
 mkdir -p ~/Library/Application\ Support/Google/Chrome/NativeMessagingHosts
 cp /Users/(username)/Documents/browser_assistant/tabai/extension/com.tabai.bridge.json \
    ~/Library/Application\ Support/Google/Chrome/NativeMessagingHosts/
 
-# 6. Edit the copied manifest to set your actual values
+# 5. Edit the copied manifest to set your actual values
 #    File: ~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.tabai.bridge.json
 #    Set "path" to: "/Users/(username)/Documents/browser_assistant/tabai/extension/native-host-bin"
 #    Set "allowed_origins" to: ["chrome-extension://YOUR_EXTENSION_ID/"]
 
-# 7. Reload the extension at chrome://extensions (click refresh icon)
+# 6. Reload the extension at chrome://extensions (click refresh icon)
 
-# 8. Add alias (optional)
+# 7. Add alias (optional)
 echo 'alias t="tabai"' >> ~/.zshrc && source ~/.zshrc
 
-# 9. Run it
+# 8. Run it
 tabai "what tabs do I have open?"
 t "close all youtube tabs"
 t "group tabs by domain"
@@ -68,7 +62,7 @@ npm install
 npm link
 ```
 
-This makes the `tabai` command available globally.
+This makes the `tabai` command available globally. On macOS, `npm install` also automatically compiles the native messaging binary (`native-host-bin`) using your current node path.
 
 ### 3. Load the Chrome extension
 
@@ -82,15 +76,15 @@ This makes the `tabai` command available globally.
 
 The bridge server needs to be registered as a Chrome native messaging host.
 
-> **macOS important:** Chrome on macOS requires the native messaging host to be a **compiled Mach-O binary**, not a script. Even with a valid shebang and `chmod +x`, Chrome will silently refuse to execute `.js` or `.sh` files — the process dies before the first line of code runs. The solution is a tiny C wrapper (`native-host-wrapper.c`) that `exec`s node with `native-host.js`.
+> **macOS important:** Chrome on macOS requires the native messaging host to be a **compiled Mach-O binary**, not a script. Even with a valid shebang and `chmod +x`, Chrome will silently refuse to execute `.js` or `.sh` files — the process dies before the first line of code runs. The solution is a tiny C wrapper (`native-host-wrapper.c`) that `exec`s node with `native-host.js`. This binary is **automatically compiled** during `npm install` (step 2).
 
 **macOS:**
 
 ```sh
-# Build the binary wrapper (required — Chrome won't run scripts directly)
-cd /path/to/tabai/extension
-cc -o native-host-bin native-host-wrapper.c
-chmod +x native-host-bin
+# The binary (native-host-bin) was already built by npm install.
+# If you need to rebuild manually:
+#   cd /path/to/tabai/extension
+#   cc -DNODE_PATH='"'$(which node)'"' -o native-host-bin native-host-wrapper.c
 
 # Create the manifest directory if it doesn't exist
 mkdir -p ~/Library/Application\ Support/Google/Chrome/NativeMessagingHosts
@@ -104,9 +98,7 @@ cp /path/to/tabai/extension/com.tabai.bridge.json \
 #   "allowed_origins": ["chrome-extension://YOUR_EXTENSION_ID/"]
 ```
 
-> **Note:** If you use nvm, the node path is hardcoded in `native-host-wrapper.c`. If your node location differs from the default, edit the `node` variable in the C file before compiling.
->
-> **When to recompile:** You only need to run `cc -o native-host-bin native-host-wrapper.c` again if you change the node path in the C file (e.g., after an nvm node version upgrade). Changes to `native-host.js` do not require recompiling.
+> **Note:** The node path is baked into the binary at compile time (from `which node`). If you switch node versions via nvm, re-run `npm install` in `cli/` to recompile. Changes to `native-host.js` do not require recompiling.
 
 **Linux:**
 
