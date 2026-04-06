@@ -422,7 +422,10 @@ async function main() {
 
     // Informational question override — questions about tabs should answer, not act
     const isDomainQuery = domainWords.some(d => cmd.toLowerCase().includes(d));
-    if (/^(what|which|show me|list|tell|are there|do i have)\b/i.test(cmd) && /\btabs?\b/i.test(cmd) &&
+    // Match standard question patterns, plus typo-tolerant "do i ha[ve/be/...]" + "any" + domain + "tabs"
+    const isInfoQuestion = /^(what|which|show me|list|tell|are there|do i have)\b/i.test(cmd) ||
+      (/^do\s+i\b/i.test(cmd) && /\bany\b/i.test(cmd) && isDomainQuery && /\btabs?\b/i.test(cmd));
+    if (isInfoQuestion && /\btabs?\b/i.test(cmd) &&
         (action.action !== 'answer' || isDomainQuery) && action.action !== 'search_content') {
       const domainFilter = domainWords.find(d => cmd.toLowerCase().includes(d));
       let matching = tabs;
@@ -508,6 +511,18 @@ async function main() {
       if (matchingTabs.length > 0 && action.targets.length > matchingTabs.length) {
         console.log(chalk.yellow(`\n⚠ Corrected: LLM selected ${action.targets.length} tabs but only ${matchingTabs.length} match "${mentionedDomain}". Filtering.`));
         action.targets = matchingTabs.map(t => t.id);
+      }
+    }
+
+    // Content-search override — "which tab talks about X", "what tab is about X" should search RAG
+    if (action.action === 'answer' && /\b(which|what)\b/i.test(cmd) && /\btabs?\b/i.test(cmd) &&
+        /\b(about|talk|discuss|mention)/i.test(cmd)) {
+      const searchStopWords = new Set(['which','what','tab','tabs','talks','talk','talking','about',
+        'discusses','discuss','mentions','mention','the','a','is','do','i','have','does','any','that','my']);
+      const searchTerms = cmd.split(/\s+/).filter(w => w.length > 1 && !searchStopWords.has(w)).join(' ');
+      if (searchTerms) {
+        if (config.debug) console.log(chalk.hex('#b388ff')(`[validate] Overrode answer → search_content for content query "${searchTerms}"`));
+        action = { action: 'search_content', query: searchTerms };
       }
     }
 
