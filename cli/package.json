@@ -9,6 +9,9 @@
   "bin": {
     "tabai": "./index.js"
   },
+  "scripts": {
+    "eval": "node test/llm-eval.js"
+  },
   "dependencies": {
     "chalk": "^5.3.0"
   },

@@ -8,6 +8,8 @@ const INDEX_DIR = path.join(os.homedir(), '.tabai');
 const INDEX_PATH = path.join(INDEX_DIR, 'rag-index.json');
 const MAX_TEXT_LENGTH = 10000;
 const SAVE_DEBOUNCE_MS = 5000;
+const EMBED_MODEL = 'embeddinggemma';
+const EMBED_BATCH_SIZE = 5; // max concurrent embedding requests
 
 const STOP_WORDS = new Set([
   'the','a','an','is','are','was','were','be','been','being','have','has','had',
@@ -52,6 +54,8 @@ let df = {};          // document frequency per term
 let docCount = 0;
 let avgDocLength = 0;
 let saveTimer = null;
+let ollamaUrl = 'http://localhost:11434';
+let embeddingsAvailable = null; // null = unknown, true/false after first check
 
 function rebuildGlobals() {
   df = {};
@@ -266,12 +270,125 @@ function getStats() {
   };
 }
 
+// --- Embedding support (embeddinggemma via Ollama) ---
+
+function setOllamaUrl(url) {
+  ollamaUrl = url || 'http://localhost:11434';
+}
+
+async function checkEmbeddings() {
+  if (embeddingsAvailable !== null) return embeddingsAvailable;
+  try {
+    const resp = await fetch(`${ollamaUrl}/api/tags`);
+    const data = await resp.json();
+    embeddingsAvailable = (data.models || []).some(m => m.name.startsWith(EMBED_MODEL));
+    if (embeddingsAvailable) console.error('[rag] embeddinggemma available — hybrid search enabled');
+    else console.error('[rag] embeddinggemma not found — BM25 only');
+  } catch {
+    embeddingsAvailable = false;
+  }
+  return embeddingsAvailable;
+}
+
+async function embed(text) {
+  if (!text) return null;
+  try {
+    const resp = await fetch(`${ollamaUrl}/api/embed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: EMBED_MODEL, input: text.slice(0, 2000) }),
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    return data.embeddings?.[0] || null;
+  } catch {
+    return null;
+  }
+}
+
+function cosineSimilarity(a, b) {
+  if (!a || !b || a.length !== b.length) return 0;
+  let dot = 0, normA = 0, normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  const denom = Math.sqrt(normA) * Math.sqrt(normB);
+  return denom > 0 ? dot / denom : 0;
+}
+
+/**
+ * Index a document and compute its embedding if embeddinggemma is available.
+ * The embedding is computed asynchronously — the BM25 index updates immediately.
+ */
+async function indexDocumentWithEmbedding({ url, title, text }) {
+  indexDocument({ url, title, text });
+
+  // Asynchronously add embedding (don't block indexing)
+  const hasEmbed = await checkEmbeddings();
+  if (hasEmbed && documents[url]) {
+    const combined = (title || '') + '. ' + (text || '').slice(0, 1500);
+    const vec = await embed(combined);
+    if (vec) {
+      documents[url].embedding = vec;
+      scheduleSave();
+    }
+  }
+}
+
+/**
+ * Hybrid search: combines BM25 + cosine similarity on embeddings.
+ * Falls back to BM25-only if embeddings are unavailable.
+ *
+ * @param {string} query - Search query
+ * @param {number} limit - Max results
+ * @param {number} alpha - BM25 weight (0-1). Embedding weight = 1-alpha. Default 0.5.
+ */
+async function hybridSearch(query, limit = 5, alpha = 0.5) {
+  const bm25Results = search(query, limit * 2); // get more candidates for re-ranking
+
+  const hasEmbed = await checkEmbeddings();
+  if (!hasEmbed || bm25Results.length === 0) {
+    return bm25Results.slice(0, limit);
+  }
+
+  // Check if any documents have embeddings
+  const docsWithEmbeddings = bm25Results.filter(r => documents[r.url]?.embedding);
+  if (docsWithEmbeddings.length === 0) {
+    return bm25Results.slice(0, limit);
+  }
+
+  // Embed the query
+  const queryVec = await embed(query);
+  if (!queryVec) return bm25Results.slice(0, limit);
+
+  // Normalize BM25 scores to 0-1
+  const maxBm25 = Math.max(...bm25Results.map(r => r.score), 0.001);
+
+  // Re-rank with hybrid score
+  const hybrid = bm25Results.map(r => {
+    const doc = documents[r.url];
+    const bm25Norm = r.score / maxBm25;
+    const cosine = doc?.embedding ? cosineSimilarity(queryVec, doc.embedding) : 0;
+    const hybridScore = alpha * bm25Norm + (1 - alpha) * cosine;
+    return { ...r, score: hybridScore, bm25Score: r.score, cosineScore: cosine };
+  });
+
+  hybrid.sort((a, b) => b.score - a.score);
+  return hybrid.slice(0, limit);
+}
+
 module.exports = {
   load,
   save: saveNow,
   indexDocument,
+  indexDocumentWithEmbedding,
   search,
+  hybridSearch,
+  embed,
   getDocument,
   cleanup,
-  getStats
+  getStats,
+  setOllamaUrl,
 };

@@ -146,7 +146,7 @@ function handleExtensionMessage(msg) {
   if (msg.action === "index_page") {
     const { url, title, text } = msg.params || {};
     if (url && text) {
-      rag.indexDocument({ url, title, text });
+      rag.indexDocumentWithEmbedding({ url, title, text });
       log("Indexed page: " + (title || url).slice(0, 60));
     }
     return;
@@ -293,11 +293,14 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // GET /rag/search?q=...&limit=5 — search indexed page content
+    // GET /rag/search?q=...&limit=5&mode=hybrid — search indexed page content
     if (req.method === "GET" && path === "/rag/search") {
       const q = url.searchParams.get("q") || "";
       const limit = parseInt(url.searchParams.get("limit") || "5", 10);
-      const results = rag.search(q, limit);
+      const mode = url.searchParams.get("mode") || "hybrid";
+      const results = mode === "hybrid"
+        ? await rag.hybridSearch(q, limit)
+        : rag.search(q, limit);
       sendJSON(res, 200, { ok: true, results });
       return;
     }
@@ -318,7 +321,8 @@ const server = http.createServer(async (req, res) => {
         const failed = result.failed || [];
         let count = 0;
         for (const doc of indexed) {
-          rag.indexDocument({ url: doc.url, title: doc.title, text: doc.text });
+          // Use embedding-enhanced indexing (computes vector async)
+          rag.indexDocumentWithEmbedding({ url: doc.url, title: doc.title, text: doc.text });
           count++;
         }
         log("Indexed " + count + " tabs (" + failed.length + " failed)");
@@ -415,6 +419,9 @@ const server = http.createServer(async (req, res) => {
 /* ------------------------------------------------------------------ */
 /*  Startup                                                           */
 /* ------------------------------------------------------------------ */
+
+// Configure RAG with Ollama URL for embeddings
+rag.setOllamaUrl(OLLAMA_URL);
 
 // Load RAG index and start periodic cleanup
 rag.load();

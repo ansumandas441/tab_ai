@@ -7,6 +7,7 @@ import { formatTabs, remapActionIds, formatHistory, formatSessions } from './for
 import { queryOllama, OllamaError } from './ollama.js';
 import { executeAction, isDestructive, formatResult, BridgeError } from './actions.js';
 import { showHistory, showSessions } from './history.js';
+import { logCall } from './logger.js';
 
 // ── Argument parsing ─────────────────────────────────────────────────────────
 
@@ -382,6 +383,7 @@ async function main() {
       tabsFormatted,
       config,
       history: historyContext || undefined,
+      tabs,
     });
   } catch (err) {
     // Fallback for search-type commands when JSON parsing fails entirely
@@ -413,6 +415,7 @@ async function main() {
   }
 
   // ── Client-side validation (defense in depth for small LLMs) ────────────
+  const llmAction = JSON.parse(JSON.stringify(action)); // snapshot before validation
   {
     const cmd = parsed.command.toLowerCase();
     const domainWords = ['github','youtube','google','stackoverflow','reddit','twitter','facebook','linkedin','slack','notion','figma','vercel','netlify'];
@@ -540,10 +543,14 @@ async function main() {
     return;
   }
 
+  const wasOverridden = JSON.stringify(llmAction) !== JSON.stringify(action);
+  const logEntry = { command: parsed.command, tabs, llmAction, finalAction: action, wasOverridden, model: config.model };
+
   // Informational actions — just display the result from the model or a quick GET
   if (INFORMATIONAL_ACTIONS.has(action.action)) {
     if (action.action === 'answer' || action.action === 'search_tabs') {
       // Already printed in preview
+      await logCall({ ...logEntry, result: { displayed: true } });
       return;
     }
 
@@ -551,8 +558,10 @@ async function main() {
       const result = await executeAction(action, config);
       const summary = formatResult(action, result);
       console.log(chalk.yellow(`\n${summary}`));
+      await logCall({ ...logEntry, result });
     } catch (err) {
       handleBridgeError(err);
+      await logCall({ ...logEntry, error: err.message });
     }
     return;
   }
@@ -573,11 +582,13 @@ async function main() {
   try {
     result = await executeAction(action, config);
   } catch (err) {
+    await logCall({ ...logEntry, error: err.message });
     handleBridgeError(err);
     process.exit(1);
   }
 
   // ── Step 6: Print summary ────────────────────────────────────────────────
+  await logCall({ ...logEntry, result });
   const summary = formatResult(action, result);
   console.log(chalk.green(`\n\u2713 ${summary}`));
 }

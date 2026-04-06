@@ -286,6 +286,42 @@ Terminal                 Bridge Server              Chrome Extension
 4. The extension executes the action using Chrome APIs and returns the result.
 5. The result flows back to the CLI and is displayed in the terminal.
 
+## Call Logging
+
+Every `tabai` invocation is automatically logged to `~/.tabai/calls.jsonl` as a JSON Lines file. Each entry records:
+
+| Field | Description |
+|-------|-------------|
+| `timestamp` | When the call was made |
+| `command` | Your natural language input |
+| `tabs` | All open tabs at the time (title + url) |
+| `llmAction` | What the LLM returned (before validation) |
+| `finalAction` | What actually executed (after client-side corrections) |
+| `wasOverridden` | `true` if validation changed the LLM's output |
+| `result` / `error` | Execution outcome |
+| `model` | Which Ollama model was used |
+
+This log is useful for finding patterns where the LLM gets things wrong, so you can add more correction rules and improve tab handling over time.
+
+### Querying the log
+
+```sh
+# View all logged calls
+cat ~/.tabai/calls.jsonl | jq .
+
+# Show calls where client-side validation corrected the LLM
+cat ~/.tabai/calls.jsonl | jq 'select(.wasOverridden)'
+
+# Show failed calls
+cat ~/.tabai/calls.jsonl | jq 'select(.error != null)'
+
+# Count calls per action type
+cat ~/.tabai/calls.jsonl | jq -r '.finalAction.action' | sort | uniq -c | sort -rn
+
+# See what the LLM wanted vs what actually ran (for overrides only)
+cat ~/.tabai/calls.jsonl | jq 'select(.wasOverridden) | {command, llm: .llmAction.action, final: .finalAction.action}'
+```
+
 ## Troubleshooting
 
 ### "Extension not connected" error
