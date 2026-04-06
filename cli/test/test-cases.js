@@ -294,4 +294,53 @@ export const TEST_CASES = [
       target: 4,
     },
   },
+
+  // ── Content / RAG indexing ────────────────────────────────────────────
+  {
+    name: 'Document all tabs content',
+    command: 'Please document all the tabs content',
+    expect: {
+      action: 'index_tabs',
+      fields: { targets: 'all' },
+    },
+  },
+  {
+    name: 'Document tabs',
+    command: 'document all tabs',
+    expect: {
+      action: 'index_tabs',
+      fields: { targets: 'all' },
+    },
+  },
+  {
+    name: 'Index all tabs',
+    command: 'index all tabs',
+    expect: {
+      action: 'index_tabs',
+      fields: { targets: 'all' },
+    },
+  },
+  {
+    name: 'Read all tabs into RAG',
+    command: 'read all tabs',
+    expect: {
+      action: 'index_tabs',
+      fields: { targets: 'all' },
+    },
+  },
+  {
+    name: 'Summarize current tab',
+    command: 'summarize this tab',
+    expect: {
+      action: 'summarize_tab',
+    },
+  },
+  {
+    name: 'Search page content',
+    command: 'search content for kubernetes',
+    expect: {
+      action: 'search_content',
+      fields: { query: (v) => typeof v === 'string' && v.includes('kubernetes') },
+    },
+  },
 ];

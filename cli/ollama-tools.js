@@ -66,7 +66,7 @@ const URL_MAP = {
 
 const L1_KEYWORDS = [
   // Order matters: more specific patterns first
-  { group: 'content',  pattern: /\b(index\s+tab|summarize|summarise|search\s+content|read\s+(all\s+)?tab|page\s+content|what\s+is\s+this\s+page)\b/ },
+  { group: 'content',  pattern: /\b(index\s+(all\s+)?(the\s+)?tabs?|summarize|summarise|search\s+content|read\s+(all\s+)?(the\s+)?tabs?|page\s+content|what\s+is\s+this\s+page|document\s+(all\s+)?(the\s+)?tabs?)\b/ },
   { group: 'session',  pattern: /\b(save\s+(this\s+|my\s+)?session|restore|undo|history|sessions?\b.*\b(list|show))\b/ },
   { group: 'close',    pattern: /\b(close|remove|kill|delete)\b/ },
   { group: 'organize', pattern: /\b(unpin|pin|unmute|mute|group|bookmark|reload|refresh|duplicate|copy\s+tab|discard|move\s+tab)\b/ },
@@ -226,7 +226,7 @@ const L2_CONTENT = {
   keywords: [
     { action: 'summarize_tab',   pattern: /\bsummar/ },
     { action: 'search_content',  pattern: /\bsearch\b|\bfind\b.*\bcontent\b|\bwhat.*talk|which.*about\b/ },
-    { action: 'index_tabs',      pattern: /\bindex|\bread\b.*\btab|\bload\b.*\bcontent\b/ },
+    { action: 'index_tabs',      pattern: /\bindex|\bread\b.*\btab|\bload\b.*\bcontent\b|\bdocument\b/ },
     { action: 'open_from_search', pattern: /\bopen\b.*\b(about|content|talk)\b/ },
   ],
   aiTools: [

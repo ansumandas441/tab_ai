@@ -54,7 +54,7 @@ Rules:
 - For "close duplicate tabs" or "deduplicate", use close_duplicates. Keeps one tab per URL, closes the rest. Set keep to "first" (default) or "last".
 - IMPORTANT: "mention", "list", "show", "tell me", "which tabs", "what tabs", "find", "how many", "count", "number of", "do I have" are informational queries — use answer (with the matching tab info as text) or search_tabs. NEVER use close_tabs, open_url, summarize_tab, or any mutation action for informational queries. "what youtube tabs" means "which tabs are youtube" — use answer, NOT open_url.
 - For counting questions like "how many tabs", answer with the count from the tab list. Do NOT use summarize_tab for counting.
-- For "read all tabs", "index all tabs", "load tabs into context", "get tab content", use index_tabs to extract and index page content into RAG. Use targets "all" or specific tab IDs.
+- For "read all tabs", "index all tabs", "load tabs into context", "get tab content", "document all tabs", "document the tabs content", use index_tabs to extract and index page content into RAG. Use targets "all" or specific tab IDs.
 - For "read this tab" or "index tab X", use index_tabs with the specific tab ID(s)
 - For "summarize this tab/page" or "what is this page about", use summarize_tab with target "current" (or a specific tabId)
 - IMPORTANT: "which article/tab/page about X", "what tabs talk about X", "find pages about X", "do I have a tab about X" are informational queries about page CONTENT — use search_content to list matching results. NEVER use open_from_search for these.
