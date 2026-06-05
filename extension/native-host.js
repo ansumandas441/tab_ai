@@ -17,7 +17,7 @@
  */
 
 const http = require("http");
-const { randomUUID } = require("crypto");
+// const crypto = require('crypto');
 
 /* ------------------------------------------------------------------ */
 /*  Configuration                                                     */
@@ -90,7 +90,8 @@ const pending = new Map();
 
 function requestExtension(action, params) {
   return new Promise((resolve, reject) => {
-    const id = randomUUID();
+    // const id = crypto.randomUUID();
+    const id = Math.random().toString(36).substring(2, 9);
     const timer = setTimeout(() => {
       pending.delete(id);
       reject(new Error("Extension request timed out after " + REQUEST_TIMEOUT + "ms"));

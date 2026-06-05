@@ -1,2 +1,4 @@
-/cli/node_modules/
-/extension/node_modules/
+node_modules/
+**/node_modules/
+graphify-out/
+extension/native-host-bin
