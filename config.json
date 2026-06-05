@@ -1,5 +1,7 @@
 {
+  "provider": "ollama",
   "ollamaUrl": "http://localhost:11434",
+  "vllmUrl": "http://localhost:8000",
   "model": "functiongemma",
   "think": false,
   "bridgePort": 9999,

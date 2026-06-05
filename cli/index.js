@@ -19,7 +19,9 @@ function parseArgs(argv) {
     dryRun: false,
     debug: false,
     model: undefined,
+    provider: undefined,
     ollamaUrl: undefined,
+    vllmUrl: undefined,
     subcommand: null,
     full: false,
   };
@@ -46,6 +48,16 @@ function parseArgs(argv) {
       parsed.ollamaUrl = args[i];
     } else if (arg.startsWith('--ollama-url=')) {
       parsed.ollamaUrl = arg.split('=').slice(1).join('=');
+    } else if (arg === '--provider') {
+      i++;
+      parsed.provider = args[i];
+    } else if (arg.startsWith('--provider=')) {
+      parsed.provider = arg.split('=').slice(1).join('=');
+    } else if (arg === '--vllm-url') {
+      i++;
+      parsed.vllmUrl = args[i];
+    } else if (arg.startsWith('--vllm-url=')) {
+      parsed.vllmUrl = arg.split('=').slice(1).join('=');
     } else if (arg === '--full') {
       parsed.full = true;
     } else if (arg === '--help' || arg === '-h') {
@@ -87,8 +99,10 @@ ${chalk.bold('Flags:')}
   -y, --yes, --no-confirm   Skip confirmation for destructive actions
   --dry-run                 Preview what would happen, don't execute
   --debug                   Show full LLM request/response and bridge calls
-  --model <name>            Override the Ollama model
+  --provider <name>         LLM provider: "ollama" (default) or "vllm"
+  --model <name>            Override the model (provider-specific format)
   --ollama-url <url>        Override the Ollama server URL
+  --vllm-url <url>          Override the vLLM server URL
   -h, --help                Show this help message
 
 ${chalk.bold('Examples:')}
@@ -288,7 +302,13 @@ async function main() {
   const parsed = parseArgs(process.argv);
 
   // Load config with CLI overrides
-  const config = await loadConfig({ model: parsed.model, ollamaUrl: parsed.ollamaUrl, debug: parsed.debug || undefined });
+  const config = await loadConfig({
+    model: parsed.model,
+    provider: parsed.provider,
+    ollamaUrl: parsed.ollamaUrl,
+    vllmUrl: parsed.vllmUrl,
+    debug: parsed.debug || undefined,
+  });
 
   // ── Subcommands (no model call) ──────────────────────────────────────────
   if (parsed.subcommand === 'history') {
@@ -367,9 +387,11 @@ async function main() {
 
   // ── Step 4: Query Ollama ─────────────────────────────────────────────────
   if (config.debug) {
-    console.log(chalk.magenta.bold('\n─── DEBUG: Querying Ollama ───'));
+    const llmUrl = config.provider === 'vllm' ? config.vllmUrl : config.ollamaUrl;
+    console.log(chalk.magenta.bold('\n─── DEBUG: Querying LLM ───'));
+    console.log(chalk.magenta(`  Provider: ${config.provider}`));
     console.log(chalk.magenta(`  Model: ${config.model}`));
-    console.log(chalk.magenta(`  URL: ${config.ollamaUrl}`));
+    console.log(chalk.magenta(`  URL: ${llmUrl}`));
     console.log(chalk.magenta(`  Command: ${parsed.command}`));
     if (historyContext) {
       console.log(chalk.magenta(`  History context: included`));

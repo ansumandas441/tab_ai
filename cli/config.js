@@ -6,8 +6,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const DEFAULTS = {
+  provider: 'ollama',
   ollamaUrl: 'http://localhost:11434',
-  model: 'qwen3.5:2b',
+  vllmUrl: 'http://localhost:8000',
+  model: 'functiongemma',
   think: false,
   bridgePort: 9999,
   confirmDestructive: false,
@@ -37,6 +39,18 @@ export async function loadConfig(overrides = {}) {
   // Respect the TABAI_PORT env var (same one the bridge reads)
   if (process.env.TABAI_PORT) {
     merged.bridgePort = parseInt(process.env.TABAI_PORT, 10);
+  }
+
+  // Provider/endpoint env overrides (lower precedence than CLI flags, which are
+  // already folded into `overrides`, so only apply when not set there).
+  if (process.env.TABAI_PROVIDER && overrides.provider === undefined) {
+    merged.provider = process.env.TABAI_PROVIDER;
+  }
+  if (process.env.TABAI_VLLM_URL && overrides.vllmUrl === undefined) {
+    merged.vllmUrl = process.env.TABAI_VLLM_URL;
+  }
+  if (process.env.TABAI_OLLAMA_URL && overrides.ollamaUrl === undefined) {
+    merged.ollamaUrl = process.env.TABAI_OLLAMA_URL;
   }
 
   // Derived convenience property
