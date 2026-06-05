@@ -100,7 +100,19 @@ cp /path/to/tabai/extension/com.tabai.bridge.json \
 
 > **Note:** The node path is baked into the binary at compile time (from `which node`). If you switch node versions via nvm, re-run `npm install` in `cli/` to recompile. Changes to `native-host.js` do not require recompiling.
 
-**Linux:**
+**Linux (automated — recommended):**
+
+Run the installer from the repo root. It detects every Chromium-family browser
+(Chrome, Chromium, Brave, Edge, Vivaldi), generates the host manifest with the
+correct absolute paths, makes `native-host.js` executable, and links the CLI:
+
+```sh
+./install-linux.sh YOUR_EXTENSION_ID
+# or, to be prompted for the ID and skip the CLI link:
+./install-linux.sh --no-link
+```
+
+**Linux (manual):**
 
 ```sh
 # On Linux, Chrome can run scripts directly — no binary wrapper needed
@@ -117,6 +129,7 @@ cp /path/to/tabai/extension/com.tabai.bridge.json \
 ```
 
 Replace `/path/to/tabai` with your actual path, and `YOUR_EXTENSION_ID` with the ID from step 3.
+For Chromium use `~/.config/chromium/...`, for Brave `~/.config/BraveSoftware/Brave-Browser/...` — the automated installer handles all of these for you.
 
 ### 5. Pull the Ollama model
 
@@ -229,13 +242,34 @@ Settings live in `tabai/config.json`:
 
 ```json
 {
+  "provider": "ollama",
   "ollamaUrl": "http://localhost:11434",
-  "model": "qwen3.5:2b",
+  "vllmUrl": "http://localhost:8000",
+  "model": "functiongemma",
   "think": false,
   "bridgePort": 9999,
-  "confirmDestructive": true
+  "confirmDestructive": false
 }
 ```
+
+### LLM provider (Ollama or vLLM)
+
+tabai can talk to two local inference backends:
+
+- **`ollama`** (default) — talks to the Ollama API at `ollamaUrl`.
+- **`vllm`** — talks to a [vLLM](https://docs.vllm.ai) OpenAI-compatible server at `vllmUrl` (`/v1/chat/completions`). This is the common GPU inference path on Linux.
+
+Select per-run or via config/env:
+
+```sh
+# per run
+tabai --provider vllm --vllm-url http://localhost:8000 --model my-model "group tabs by domain"
+
+# or via environment
+TABAI_PROVIDER=vllm TABAI_VLLM_URL=http://localhost:8000 tabai "list tabs"
+```
+
+Precedence is CLI flags > environment (`TABAI_PROVIDER`, `TABAI_VLLM_URL`, `TABAI_OLLAMA_URL`) > `config.json` > defaults. The `functiongemma` tool-calling path runs through Ollama regardless of provider.
 
 ### Overrides
 
