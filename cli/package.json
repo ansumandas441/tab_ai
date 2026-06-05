@@ -3,8 +3,14 @@
   "version": "1.0.0",
   "description": "CLI tool that controls Chrome via natural language from the terminal using a local Ollama instance",
   "type": "module",
+  "scripts": {
+    "postinstall": "cd ../extension && cc -DNODE_PATH='\"'$(which node)'\"' -o native-host-bin native-host-wrapper.c && chmod +x native-host-bin && echo 'Built native-host-bin with node:' $(which node)"
+  },
   "bin": {
     "tabai": "./index.js"
+  },
+  "scripts": {
+    "eval": "node test/llm-eval.js"
   },
   "dependencies": {
     "chalk": "^5.3.0"

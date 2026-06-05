@@ -1,10 +1,18 @@
 /**
  * Format tab metadata compactly for the LLM prompt.
+ * Uses simple sequential IDs (1, 2, 3...) instead of Chrome's large tab IDs
+ * to avoid confusing small LLMs.
+ *
  * @param {Array<object>} tabs - Array of tab metadata objects from the bridge
- * @returns {string} Compact multi-line representation
+ * @returns {{ text: string, idMap: Record<number, number> }}
+ *   text    — compact multi-line representation for the LLM
+ *   idMap   — mapping from sequential ID → real Chrome tab ID
  */
 export function formatTabs(tabs) {
-  if (!tabs || tabs.length === 0) return 'Open tabs (0):';
+  if (!tabs || tabs.length === 0) return { text: 'Open tabs (0):', idMap: {} };
+
+  const idMap = {};   // { sequentialId: realChromeTabId }
+  let seq = 1;
 
   // Group tabs by windowId
   const byWindow = new Map();
@@ -17,24 +25,58 @@ export function formatTabs(tabs) {
   const windowCount = byWindow.size;
   const lines = [`Open tabs (${tabs.length} across ${windowCount} window${windowCount !== 1 ? 's' : ''}):`];
 
-  for (const [wid, windowTabs] of byWindow) {
-    lines.push(`--- Window ${wid} ---`);
+  for (const [, windowTabs] of byWindow) {
     for (const t of windowTabs) {
+      idMap[seq] = t.id;
       const domain = extractDomain(t.url);
-      const pinned = t.pinned ? ' pinned' : '';
-      const muted = t.muted ? ' muted' : '';
-      const active = t.active ? ' active' : '';
-      const audible = t.audible ? ' audible' : '';
-      const flags = [pinned, muted, active, audible].filter(Boolean).join('');
+      const flags = [
+        t.pinned ? ' pinned' : '',
+        t.muted ? ' muted' : '',
+        t.active ? ' active' : '',
+        t.audible ? ' audible' : '',
+      ].filter(Boolean).join('');
 
-      let line = `[id:${t.id}] ${truncate(t.title, 80)} | ${domain}`;
-      line += ` | w:${t.windowId ?? 0} i:${t.index ?? 0}`;
+      let line = `[${seq}] ${truncate(t.title, 80)} | ${domain}`;
       if (flags) line += ` |${flags}`;
       lines.push(line);
+      seq++;
     }
   }
 
-  return lines.join('\n');
+  return { text: lines.join('\n'), idMap };
+}
+
+/**
+ * Remap sequential tab IDs in an LLM-produced action back to real Chrome tab IDs.
+ * @param {object} action - Action object from the LLM
+ * @param {Record<number, number>} idMap - Sequential → real Chrome tab ID mapping
+ * @returns {object} Action with remapped IDs
+ */
+export function remapActionIds(action, idMap) {
+  if (!action || !idMap || Object.keys(idMap).length === 0) return action;
+
+  const remap = (id) => {
+    if (typeof id === 'string' && /^\d+$/.test(id)) id = parseInt(id, 10);
+    return (typeof id === 'number' && idMap[id] != null) ? idMap[id] : id;
+  };
+
+  const copy = { ...action };
+
+  if (Array.isArray(copy.targets)) {
+    copy.targets = copy.targets.map(remap);
+  } else if (typeof copy.targets === 'number' || (typeof copy.targets === 'string' && /^\d+$/.test(copy.targets))) {
+    copy.targets = remap(copy.targets);
+  }
+
+  if (copy.target != null && copy.target !== 'current' && copy.target !== 'all') {
+    copy.target = remap(copy.target);
+  }
+
+  if (Array.isArray(copy.keep)) {
+    copy.keep = copy.keep.map(remap);
+  }
+
+  return copy;
 }
 
 /**

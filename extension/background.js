@@ -21,6 +21,16 @@ const MAX_SESSIONS     = 50;
 const NATIVE_HOST      = "com.tabai.bridge";
 
 /* ------------------------------------------------------------------ */
+/*  Debug logging                                                     */
+/* ------------------------------------------------------------------ */
+
+function dbg(...args) {
+  console.log("[tabai]", ...args);
+}
+
+dbg("Service worker starting. Extension ID:", chrome.runtime.id);
+
+/* ------------------------------------------------------------------ */
 /*  In-memory tab index (flushed to storage on every mutation)        */
 /* ------------------------------------------------------------------ */
 
@@ -117,10 +127,49 @@ function matchesQuery(tab, query) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Content extraction (for RAG indexing)                             */
+/* ------------------------------------------------------------------ */
+
+async function extractContent(tabId) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        const clone = document.body.cloneNode(true);
+        for (const el of clone.querySelectorAll(
+          'script,style,nav,header,footer,aside,iframe,noscript,' +
+          '.sidebar,.nav,.menu,[role="navigation"],[role="banner"],' +
+          '[role="complementary"]'
+        )) {
+          el.remove();
+        }
+        let text = clone.innerText || clone.textContent || '';
+        text = text.replace(/\s+/g, ' ').trim();
+        return { text: text.slice(0, 10000), title: document.title, url: location.href };
+      }
+    });
+    return results?.[0]?.result || null;
+  } catch (e) {
+    // Silently fail for restricted pages (chrome://, PDFs, etc.)
+    return null;
+  }
+}
+
+function shouldIndex(url) {
+  if (!url) return false;
+  return !url.startsWith('chrome://') &&
+         !url.startsWith('chrome-extension://') &&
+         !url.startsWith('about:') &&
+         !url.startsWith('chrome-search://') &&
+         !url.startsWith('devtools://');
+}
+
+/* ------------------------------------------------------------------ */
 /*  Bootstrap: build initial tab index                                */
 /* ------------------------------------------------------------------ */
 
 async function buildIndex() {
+  dbg("buildIndex: starting...");
   try {
     const tabs = await chrome.tabs.query({});
     tabIndex = {};
@@ -128,7 +177,9 @@ async function buildIndex() {
       tabIndex[tab.id] = compact(tab);
     }
     await flushIndex();
+    dbg("buildIndex: indexed", Object.keys(tabIndex).length, "tabs");
   } catch (e) {
+    dbg("buildIndex: FAILED", e.message);
     console.error("tabai: buildIndex failed", e);
   }
 }
@@ -165,6 +216,21 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     tabIndex[tabId] = compact(tab);
   }
   await flushIndex();
+
+  // Background RAG indexing: extract content when page finishes loading
+  if (changeInfo.status === 'complete' && shouldIndex(tab.url)) {
+    extractContent(tabId).then(content => {
+      if (content && nativePort) {
+        try {
+          nativePort.postMessage({
+            id: 'index-' + Date.now(),
+            action: 'index_page',
+            params: content
+          });
+        } catch (_) {}
+      }
+    });
+  }
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
@@ -231,21 +297,31 @@ if (chrome.tabGroups && chrome.tabGroups.onUpdated) {
 /*  Native messaging                                                  */
 /* ------------------------------------------------------------------ */
 
+let connectAttempts = 0;
+
 function connectNative() {
+  connectAttempts++;
+  dbg("connectNative: attempt #" + connectAttempts, "| host:", NATIVE_HOST);
+  dbg("connectNative: extension ID is:", chrome.runtime.id);
+  dbg("connectNative: allowed_origins in manifest must include: chrome-extension://" + chrome.runtime.id + "/");
+
   if (nativePort) {
+    dbg("connectNative: disconnecting previous port");
     try { nativePort.disconnect(); } catch (_) {}
   }
 
   try {
     nativePort = chrome.runtime.connectNative(NATIVE_HOST);
+    dbg("connectNative: connectNative() returned successfully, port created");
   } catch (e) {
+    dbg("connectNative: EXCEPTION on connectNative():", e.message);
     console.error("tabai: connectNative failed", e);
     scheduleReconnect();
     return;
   }
 
   nativePort.onMessage.addListener(async (msg) => {
-    // msg = { id: "...", action: "...", params: {...} }
+    dbg("onMessage: received from native host:", JSON.stringify(msg).slice(0, 200));
     let response;
     try {
       response = await handleAction(msg);
@@ -254,13 +330,18 @@ function connectNative() {
     }
     try {
       nativePort.postMessage(response);
+      dbg("onMessage: sent response for action:", msg.action, "id:", msg.id);
     } catch (e) {
+      dbg("onMessage: postMessage FAILED:", e.message);
       console.error("tabai: postMessage failed", e);
     }
   });
 
   nativePort.onDisconnect.addListener(() => {
     const err = chrome.runtime.lastError;
+    dbg("onDisconnect: native port disconnected!");
+    dbg("onDisconnect: lastError:", err ? err.message : "(none)");
+    dbg("onDisconnect: this was attempt #" + connectAttempts);
     console.warn("tabai: native port disconnected", err ? err.message : "");
     nativePort = null;
     scheduleReconnect();
@@ -269,10 +350,12 @@ function connectNative() {
 
 function scheduleReconnect() {
   if (reconnectTimer) clearTimeout(reconnectTimer);
+  const delay = Math.min(3000 * connectAttempts, 30000); // back off up to 30s
+  dbg("scheduleReconnect: will retry in", delay + "ms");
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     connectNative();
-  }, 3000);
+  }, delay);
 }
 
 // Connect on startup
@@ -280,11 +363,13 @@ connectNative();
 
 // Also reconnect when service worker wakes up
 chrome.runtime.onStartup.addListener(() => {
+  dbg("onStartup event fired");
   buildIndex();
   connectNative();
 });
 
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener((details) => {
+  dbg("onInstalled event fired, reason:", details.reason);
   buildIndex();
   connectNative();
 });
@@ -307,17 +392,22 @@ chrome.runtime.onInstalled.addListener(() => {
 async function resolveTargets(targets) {
   if (!targets) return [];
 
-  // Single numeric id
+  // Single numeric id (or numeric string from LLM)
   if (typeof targets === "number") {
     const t = tabIndex[targets];
     return t ? [t] : [];
   }
 
-  // Array of numeric ids
+  if (typeof targets === "string" && /^\d+$/.test(targets)) {
+    const t = tabIndex[parseInt(targets, 10)];
+    return t ? [t] : [];
+  }
+
+  // Array of numeric ids (or numeric strings)
   if (Array.isArray(targets)) {
     if (targets.length === 0) return [];
-    if (typeof targets[0] === "number") {
-      return targets.map(id => tabIndex[id]).filter(Boolean);
+    if (typeof targets[0] === "number" || (typeof targets[0] === "string" && /^\d+$/.test(targets[0]))) {
+      return targets.map(id => tabIndex[typeof id === "string" ? parseInt(id, 10) : id]).filter(Boolean);
     }
     // Array of query strings — union of matches
     const results = [];
@@ -397,6 +487,28 @@ async function handleAction(msg) {
       const keepIds = new Set(keep.map(t => t.id));
       const allTabs = Object.values(tabIndex);
       const toClose = allTabs.filter(t => !keepIds.has(t.id)).map(t => t.id);
+      if (toClose.length === 0) return { id, result: { closed: 0, tabIds: [] } };
+      await chrome.tabs.remove(toClose);
+      return { id, result: { closed: toClose.length, tabIds: toClose } };
+    }
+
+    case "close_duplicates": {
+      await saveSession("before-close-duplicates");
+      const allTabs = Object.values(tabIndex);
+      const byUrl = {};
+      for (const tab of allTabs) {
+        const url = tab.url || "";
+        if (!url || url === "chrome://newtab/") continue;
+        if (!byUrl[url]) byUrl[url] = [];
+        byUrl[url].push(tab);
+      }
+      const toClose = [];
+      for (const [, group] of Object.entries(byUrl)) {
+        if (group.length < 2) continue;
+        group.sort((a, b) => a.id - b.id);
+        const dupes = p.keep === "last" ? group.slice(0, -1) : group.slice(1);
+        for (const tab of dupes) toClose.push(tab.id);
+      }
       if (toClose.length === 0) return { id, result: { closed: 0, tabIds: [] } };
       await chrome.tabs.remove(toClose);
       return { id, result: { closed: toClose.length, tabIds: toClose } };
@@ -800,6 +912,40 @@ async function handleAction(msg) {
       } catch (e) {
         return { id, error: e.message };
       }
+    }
+
+    /* ---------- Content extraction ---------- */
+
+    case "extract_content": {
+      const targets = await resolveTargets(p.target || p.targets || "current");
+      if (targets.length === 0) return { id, error: "No matching tab" };
+      const content = await extractContent(targets[0].id);
+      if (!content) return { id, error: "Could not extract content from this page" };
+      return { id, result: content };
+    }
+
+    case "extract_tabs_content": {
+      const targets = await resolveTargets(p.targets || "all");
+      if (targets.length === 0) return { id, error: "No matching tabs" };
+      const indexed = [];
+      const failed = [];
+      for (const tab of targets) {
+        if (!shouldIndex(tab.url)) {
+          failed.push({ id: tab.id, title: tab.title, reason: "restricted URL" });
+          continue;
+        }
+        try {
+          const content = await extractContent(tab.id);
+          if (content && content.text) {
+            indexed.push({ url: content.url, title: content.title, text: content.text });
+          } else {
+            failed.push({ id: tab.id, title: tab.title, reason: "could not extract content" });
+          }
+        } catch (e) {
+          failed.push({ id: tab.id, title: tab.title, reason: e.message || "extraction error" });
+        }
+      }
+      return { id, result: { indexed, failed } };
     }
 
     /* ---------- Utility ---------- */
